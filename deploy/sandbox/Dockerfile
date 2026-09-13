@@ -20,7 +20,7 @@
 # Both targets are published by .github/workflows/publish-sandbox-image.yml.
 ARG BASE=docker-base
 
-FROM ghcr.io/czpython/drukbox/sandbox:latest@sha256:1b9e843541d57278655be9aef328b8648152a507b65cfb3e7b53c87087b29544 AS docker-base
+FROM ghcr.io/czpython/drukbox/sandbox:latest@sha256:72c6ab246c53481051d8d4ec9ed34e9aff47f539f989f625cf20ba82e9b3f311 AS docker-base
 FROM ghcr.io/czpython/drukbox/sbx-sandbox:latest@sha256:ab08421818ad21ed7a8a9db6f5c184a754c4ab6c85c26877983c245dbcd34bcf AS sbx-base
 
 FROM ${BASE} AS toolchain
