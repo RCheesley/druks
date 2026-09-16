@@ -1,6 +1,6 @@
 import logging
 
-from druks.database import db_session
+from druks.db import db_session
 from druks.files.storage import reap_deleted_file_bytes
 from druks.harnesses.datastructures import RotationResult
 from druks.harnesses.directory import refresh_added_catalogs
@@ -44,7 +44,7 @@ async def release_orphan_boxes() -> None:
 
 async def _release_orphan_boxes() -> None:
     # A run that died without its cleanup leaves its box until the lease ends.
-    for identity in await SandboxIdentity.list_orphans():
+    for identity in await SandboxIdentity.list_orphans(db_session()):
         logger.info("releasing the orphan box %s of run %s", identity.host_id, identity.run_id)
         await sandbox_client.release(host_id=identity.host_id)
 

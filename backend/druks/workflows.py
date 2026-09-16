@@ -37,7 +37,8 @@ from druks.apps.settings import (
     validate_setting_override,
     validate_settings_declaration,
 )
-from druks.database import db_session, get_session
+from druks.database import get_session
+from druks.db import db_session
 from druks.durable.activity import set_run_phase
 from druks.durable.datastructures import Subject
 from druks.durable.engine import (
@@ -290,7 +291,7 @@ class Gate(BaseModel):
                 f"{cls.__name__}.answer() takes the subject whose run is parked on it, "
                 f"not {type(subject).__name__}"
             )
-        runs = await Run.list_for_subject(subject.subject_type, str(subject.id))
+        runs = await Run.list_for_subject(db_session(), subject.subject_type, str(subject.id))
         parked = next((run for run in runs if run.is_parked and run.input_gate == cls.name), None)
         if parked:
             await parked.resume(**reply)
@@ -378,7 +379,7 @@ async def _notify_designated_destination(workflow_id: str, subject: dict[str, An
     # The operator's settings select the destination for the recorded request.
     async def _create() -> str | None:
         async with step_session() as session:
-            run = await Run.get(workflow_id)
+            run = await session.get(Run, workflow_id)
             account = await Account.get_for_run(session, run.account_id)
             destination_id = account.gate_park_destination_id
             if destination_id:
@@ -556,7 +557,7 @@ async def _emit_run_event(
     # own arguments, so a replay stamps the same routing every time.
     async def _transition() -> dict[str, Any] | None:
         async with step_session() as session:
-            run = await Run.get(workflow_id)
+            run = await session.get(Run, workflow_id)
             # Read before the flush: flushing the update unloads the row's
             # computed columns, and reading one back would be implicit IO.
             label = run.subject_label
@@ -809,7 +810,7 @@ class Workflow:
 
         async def record() -> None:
             async with step_session() as session:
-                run = await Run.get(self.workflow_id)
+                run = await session.get(Run, self.workflow_id)
                 await Event.emit(
                     session,
                     type=topic,
@@ -866,24 +867,28 @@ class Workflow:
         # Built per agent call, so nothing is held across steps.
         return self.workspace_class(**await self.get_workspace_kwargs(host))
 
-    async def get_secret_refs(self) -> list[SecretRef]:
+    async def get_secret_refs(self, session: AsyncSession) -> list[SecretRef]:
         # The secrets a box of this run fetches beyond its config's: the
         # workspace's and its MCP servers', read before the box exists.
         subject = await self.subject
-        _, mcp = await self.workspace_class.get_mcp_delivery(subject, self.account_id)
+        _, mcp = await self.workspace_class.get_mcp_delivery(session, subject, self.account_id)
         return [*await self.workspace_class.get_secret_refs(subject), *mcp]
 
-    async def _lease_host(self, config: "AgentConfig") -> str | None:
+    async def _lease_host(self, session: AsyncSession, config: "AgentConfig") -> str | None:
         # The warm VM, provisioned once per segment; state is carried in git, so
         # only the host-id matters across steps — held-across-steps never fights replay.
         if not self.steps_reuse_sandbox:
             return
-        refs = [*config.secret_refs, *await self.get_secret_refs()]
+        refs = [*config.secret_refs, *await self.get_secret_refs(session)]
         # A crashed process left its box behind. Its identity finds it again.
         if (
             not self._host
             and refs
-            and (identity := await SandboxIdentity.lookup(self._workflow_id, "workflow", refs))
+            and (
+                identity := await SandboxIdentity.lookup(
+                    session, self._workflow_id, "workflow", refs
+                )
+            )
         ):
             self._host = await sandbox_client.reattach(host_id=identity.host_id)
             self._host_secrets_id = config.secrets_id
@@ -908,7 +913,7 @@ class Workflow:
             identity, entries, key = None, {}, config.secrets_id
             if refs:
                 identity, entries = await SandboxIdentity.create(
-                    run_id=self._workflow_id, scoped_to="workflow", secret_refs=refs
+                    session, run_id=self._workflow_id, scoped_to="workflow", secret_refs=refs
                 )
                 key = identity.id
             self._host = await sandbox_client.provision(
@@ -993,7 +998,9 @@ class Workflow:
     @classmethod
     async def cancel(cls, subject: Subject | StoredSubject, *, failure: str | None = None) -> None:
         cls._validate_subject(subject)
-        runs = await Run.list_for_subject(subject.subject_type, str(subject.id), kind=cls.kind)
+        runs = await Run.list_for_subject(
+            db_session(), subject.subject_type, str(subject.id), kind=cls.kind
+        )
         run = next((run for run in runs if run.is_active), None)
         if run:
             await run.cancel(failure=failure)

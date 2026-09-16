@@ -9,7 +9,8 @@ import pytest
 from dbos import DBOS
 from druks.agents import Agent, AgentOutput
 from druks.apps.registry import agents, workflows
-from druks.database import configure_session, db_session, get_session, session_scope
+from druks.database import configure_session, get_session, session_scope
+from druks.db import db_session
 from druks.durable import FatalError, Run, RunState
 from druks.durable.dbos_state import workflow_status
 from druks.durable.engine import configure_engine, init_dbos, launch, shutdown
@@ -753,14 +754,14 @@ def _fake_ephemeral_returning(output: dict, seen: list[dict], held: list[bool]):
 
     @contextlib.asynccontextmanager
     async def _fake_ephemeral(self, **_kw):
-        async def _run_agent(**kwargs):
+        async def _run_agent(_session, **kwargs):
             seen.append(kwargs)
             # The agent runs for minutes in production, so the step commits before
             # handing over: its own session holds no connection through the wait.
             # Ask that session — sessions are task-scoped and the agent is awaited
             # in the step's task, so this is it. The pool cannot answer: it is
             # shared, and another reader in this instant is not this step pinning.
-            from druks.database import db_session
+            from druks.db import db_session
 
             held.append(db_session().in_transaction())
             # The harness names the on-disk dir (and the row) from the supplied
@@ -1130,7 +1131,8 @@ async def test_apply_schedules_evaluates_cron_in_installation_timezone(rt, monke
 async def test_user_settings_get_recreates_the_singleton(rt):
     # get() is the first-touch creator; its ON CONFLICT insert lets two
     # processes booting one fresh database both call it safely.
-    from druks.database import db_session, session_scope
+    from druks.database import session_scope
+    from druks.db import db_session
     from druks.user_settings.models import InstallationSettings
     from sqlalchemy import delete
 
@@ -1143,7 +1145,8 @@ async def test_user_settings_get_recreates_the_singleton(rt):
 
 
 async def test_a_run_hydrates_the_subject_row_it_was_started_for(rt):
-    from druks.database import db_session, session_scope
+    from druks.database import session_scope
+    from druks.db import db_session
 
     async with session_scope(rt.engine):
         widget = Widget()
@@ -1456,8 +1459,8 @@ async def test_failed_retry_attempts_keep_separate_terminal_records(rt):
     try:
         first_id = await FailingAttempt.start(subject=Widget(id=7))
         await _wait_for(rt.engine, first_id, lambda run: run.state == RunState.FAILED)
-        async with session_scope(rt.engine):
-            first_run = await Run.get(first_id)
+        async with session_scope(rt.engine) as session:
+            first_run = await session.get(Run, first_id)
             retry_id = await first_run.retry()
         await _wait_for(rt.engine, retry_id, lambda run: run.state == RunState.FAILED)
 

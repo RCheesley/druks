@@ -13,7 +13,7 @@ from druks.contrib.software_factory.enums import Resolution
 from druks.contrib.software_factory.models import WorkItem
 from druks.contrib.software_factory.subscribers import pr_close_settles_the_item
 from druks.contrib.software_factory.workflows import Build, PullRequestReview
-from druks.database import db_session
+from druks.db import db_session
 from druks.durable.models import AgentCall, Artifact
 from druks.events.models import Event
 from druks.testing import seed_run
@@ -91,12 +91,13 @@ async def test_review_result_belongs_to_the_identity_only_pull_request(druks_db,
     )
     for _ in range(2):
         await Artifact.record(
+            druks_db,
             call_id=call.id,
             call_dir=tmp_path,
             event=report.to_event(),
             **report.to_artifact(),
         )
-    artifact = await Artifact.get_for_call(call.id)
+    artifact = await Artifact.get_for_call(druks_db, call.id)
     content = (tmp_path / artifact.path).read_text()
     assert "request_changes" in content
     assert "The write can lose data." in content

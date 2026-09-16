@@ -8,7 +8,7 @@ import pytest
 from conftest import connect_provider, make_jwt
 from drukbox_sdk import Secret
 from druks.accounts.models import Account
-from druks.database import db_session
+from druks.db import db_session
 from druks.harnesses.claude import ClaudeHarness, _get_credentials
 from druks.harnesses.codex import CodexHarness
 from druks.harnesses.datastructures import SandboxSettings
@@ -49,7 +49,7 @@ async def test_claude_bundle_carries_no_credential_file(druks_db):
         image="x",
         harness_config_root=Path("/harnesses"),
     )
-    bundle = await _get_credentials(sandbox)
+    bundle = await _get_credentials(db_session(), sandbox)
     assert not any(type(entry) is HomeFile for entry in bundle.home)
     assert bundle.home[0] == HomeCopy(
         ".claude/settings.json", Path("/harnesses/claude/settings.json")
@@ -79,7 +79,7 @@ async def test_the_operators_claude_config_reaches_the_box_without_its_mcp_serve
         harness_config_root=config_root,
     )
 
-    bundle = await _get_credentials(sandbox)
+    bundle = await _get_credentials(db_session(), sandbox)
 
     [config] = [entry for entry in bundle.home if entry.path == ".claude.json"]
     assert json.loads(config.content) == {"theme": "dark"}
@@ -120,13 +120,13 @@ async def test_credentials_builders_read_their_harness_config_directories(druks_
         harness_config_root=config_root,
     )
 
-    claude_bundle = await _get_credentials(sandbox)
+    claude_bundle = await _get_credentials(db_session(), sandbox)
     codex_bundle = await CodexHarness(
         model=CodexHarness.default_model,
         fast_mode=False,
         effort=None,
         sandbox=sandbox,
-    )._get_credentials(sandbox)
+    )._get_credentials(db_session(), sandbox)
 
     # No credential file: each CLI reads a placeholder the box holds.
     assert not any(type(entry) is HomeFile for entry in (*claude_bundle.home, *codex_bundle.home))
@@ -194,6 +194,7 @@ async def test_config_delivery_does_not_copy_host_provider_credentials(
     invocation = await harness(
         model=harness.default_model, fast_mode=False, effort=None, sandbox=sandbox
     ).build_invocation(
+        db_session(),
         prompt="hello",
         schema={"type": "object"},
         run_id="run-1",
@@ -221,7 +222,7 @@ async def test_a_codex_subscription_binds_a_custom_entry_on_chatgpt(druks_db):
     await seed_run(db_session(), kind=Summarize.kind, run_id="run-1")
 
     identity, entries = await SandboxIdentity.create(
-        run_id="run-1", scoped_to="workflow", secret_refs=[ref]
+        db_session(), run_id="run-1", scoped_to="workflow", secret_refs=[ref]
     )
     entry = entries["codex_subscription_token"].entry()
 
@@ -250,6 +251,7 @@ async def test_the_codex_wrapper_writes_its_login_around_the_placeholder(druks_d
     invocation = await CodexHarness(
         model=CodexHarness.default_model, fast_mode=False, effort=None, sandbox=sandbox
     ).build_invocation(
+        db_session(),
         prompt="hello",
         schema={"type": "object"},
         run_id="run-1",

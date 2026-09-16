@@ -7,7 +7,7 @@ import pytest
 from conftest import installation_key, make_agent_result
 from druks import agents
 from druks.accounts.models import Account
-from druks.database import db_session
+from druks.db import db_session
 from druks.durable import AgentCall, WorkflowError
 from druks.files import File
 from druks.sandbox.exceptions import SandboxDownloadError
@@ -157,7 +157,7 @@ async def test_run_refuses_unconnected_harness(druks_db, tmp_path, monkeypatch, 
     _patch_ephemeral(monkeypatch, sandbox)
 
     with pytest.raises(HarnessNotConnectedError, match="connect your Anthropic subscription"):
-        await DUMMY_AGENT._run(workflow_id="wf-9")
+        await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
     sandbox.run_agent.assert_not_awaited()
 
@@ -168,7 +168,7 @@ async def test_declaration_drives_run_agent_call(druks_db, tmp_path, monkeypatch
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     _patch_ephemeral(monkeypatch, sandbox)
 
-    result = await DUMMY_AGENT._run(workflow_id="wf-9", repo="acme/widget")
+    result = await DUMMY_AGENT._run(db_session(), workflow_id="wf-9", repo="acme/widget")
 
     assert result == DummyOutput(ok=True)
     kwargs = sandbox.run_agent.await_args.kwargs
@@ -191,7 +191,7 @@ async def test_declared_plugin_choice_is_forwarded(druks_db, tmp_path, monkeypat
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     _patch_ephemeral(monkeypatch, sandbox)
 
-    await agent._run(workflow_id="wf-9")
+    await agent._run(db_session(), workflow_id="wf-9")
 
     assert sandbox.run_agent.await_args.kwargs["include_plugins"] is False
 
@@ -208,7 +208,7 @@ async def test_runner_comes_from_workflow_workspace_factory(
     _patch_ephemeral(monkeypatch, MagicMock())  # the box; the factory below ignores it
     workspace = MagicMock()
     workspace.host_id = "host-test"
-    workspace.prepare_context = AsyncMock(side_effect=lambda context, **_: context)
+    workspace.prepare_context = AsyncMock(side_effect=lambda _session, context, **_: context)
     workspace.run_agent = AsyncMock(return_value=make_agent_result({"ok": True}, agent="dummy"))
 
     async def _get_workspace(sandbox):
@@ -216,7 +216,7 @@ async def test_runner_comes_from_workflow_workspace_factory(
 
     monkeypatch.setattr(current_workflow.get(), "get_workspace", _get_workspace)
 
-    result = await DUMMY_AGENT._run(workflow_id="wf-9")
+    result = await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
     assert result == DummyOutput(ok=True)
     workspace.run_agent.assert_awaited_once()
@@ -238,7 +238,7 @@ async def test_ephemeral_acquisition_keys_idempotency_to_workflow_step(
 
     monkeypatch.setattr("druks.sandbox.client.Client.ephemeral", fake_ephemeral)
 
-    result = await DUMMY_AGENT._run(workflow_id="wf-9")
+    result = await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
     assert result == DummyOutput(ok=True)
     [identity] = await _identities("wf-9")
@@ -256,8 +256,8 @@ async def test_running_call_visible_then_finished(
     await SettingsOverride.set_agent_billing(druks_db, DUMMY_AGENT.id, billing)
     during: dict[str, object] = {}
 
-    async def _run_agent(*, call_id, config, **_kwargs):
-        row = await AgentCall.get(call_id)
+    async def _run_agent(_session, *, call_id, config, **_kwargs):
+        row = await AgentCall.get(db_session(), call_id)
         assert row.subscription_id == (config.subscription.id if config.subscription else None)
         assert row.api_key_id == (config.api_key.id if config.api_key else None)
         during["status"] = row.status
@@ -267,10 +267,10 @@ async def test_running_call_visible_then_finished(
     sandbox.run_agent = _run_agent
     _patch_ephemeral(monkeypatch, sandbox)
 
-    await DUMMY_AGENT._run(workflow_id="wf-9")
+    await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
     assert during == {"status": "running", "host": "host-test"}
-    [call] = await AgentCall.list_for_run("wf-9")
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
     assert call.status == "succeeded"
     assert call.sandbox_host_id == "host-test"
     assert call.finished_at is not None
@@ -289,9 +289,9 @@ async def test_provisioning_failure_records_no_call(druks_db, tmp_path, monkeypa
     monkeypatch.setattr("druks.sandbox.client.Client.ephemeral", boom)
 
     with pytest.raises(RuntimeError, match="no capacity"):
-        await DUMMY_AGENT._run(workflow_id="wf-9")
+        await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
-    assert await AgentCall.list_for_run("wf-9") == []
+    assert await AgentCall.list_for_run(db_session(), "wf-9") == []
 
 
 async def test_crash_after_start_fails_the_call(druks_db, tmp_path, monkeypatch, current_run):
@@ -299,16 +299,16 @@ async def test_crash_after_start_fails_the_call(druks_db, tmp_path, monkeypatch,
     row instead of leaving it dangling RUNNING."""
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
 
-    async def _boom(**_kwargs):
+    async def _boom(_session, **_kwargs):
         raise RuntimeError("kaboom")
 
     sandbox.run_agent = _boom
     _patch_ephemeral(monkeypatch, sandbox)
 
     with pytest.raises(RuntimeError, match="kaboom"):
-        await DUMMY_AGENT._run(workflow_id="wf-9")
+        await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
-    [call] = await AgentCall.list_for_run("wf-9")
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
     assert call.status == "failed"
     assert "kaboom" in call.last_error
 
@@ -339,9 +339,9 @@ async def test_file_hydration_failure_fails_the_agent_call(
     _patch_ephemeral(monkeypatch, sandbox)
 
     with pytest.raises(SandboxDownloadError, match=message):
-        await FILE_AGENT._run(workflow_id="wf-9")
+        await FILE_AGENT._run(db_session(), workflow_id="wf-9")
 
-    [call] = await AgentCall.list_for_run("wf-9")
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
     assert call.status == "failed"
     assert message in call.last_error
     assert list((tmp_path / "files").iterdir()) == []
@@ -384,13 +384,13 @@ async def test_file_output_reaches_the_next_agents_input(
         lambda self: {"kind": "markdown", "title": "Shot", "content": self.image.url},
     )
 
-    produced = await FILE_AGENT._run(workflow_id="wf-9")
-    consumed = await DUMMY_AGENT._run(workflow_id="wf-9", image=produced.image)
+    produced = await FILE_AGENT._run(db_session(), workflow_id="wf-9")
+    consumed = await DUMMY_AGENT._run(db_session(), workflow_id="wf-9", image=produced.image)
 
     assert consumed == DummyOutput(ok=True)
     assert prompt_contexts[1]["image"].endswith(f"/{produced.image.id}/{produced.image.name}")
     sandbox.upload_file.assert_awaited_once()
-    calls = await AgentCall.list_for_run("wf-9")
+    calls = await AgentCall.list_for_run(db_session(), "wf-9")
     assert [call.status for call in calls] == ["succeeded", "succeeded"]
     artifact = (await db_session().scalars(select(agents.Artifact))).one()
     content = (tmp_path / "run-wf-9" / artifact.agent_call_id / artifact.path).read_text()
@@ -408,17 +408,17 @@ async def test_a_carried_failure_is_raised_with_its_code(
     sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
     overloaded = HarnessOverloadedError("claude exited with 1. API Error: 529 Overloaded.")
 
-    async def _run_agent(**_kwargs):
+    async def _run_agent(_session, **_kwargs):
         return make_agent_result(None, agent="dummy", error=overloaded)
 
     sandbox.run_agent = _run_agent
     _patch_ephemeral(monkeypatch, sandbox)
 
     with pytest.raises(HarnessOverloadedError) as excinfo:
-        await DUMMY_AGENT._run(workflow_id="wf-9")
+        await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
     assert excinfo.value is overloaded
-    [call] = await AgentCall.list_for_run("wf-9")
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
     assert call.status == "failed"
     assert call.failure_code == "overloaded"
     assert call.last_error == (
@@ -454,7 +454,7 @@ async def test_body_level_overload_retries_as_separate_durable_attempts(
     assert [awaited.args[0] for awaited in sleep.await_args_list] == [285.0, 945.0]
     assert [options["name"] for options in checkpoints] == ["test.agent.dummy"] * 3
     assert current_run._reap_run.await_count == 2
-    calls = await AgentCall.list_for_run("wf-9")
+    calls = await AgentCall.list_for_run(db_session(), "wf-9")
     assert len(calls) == 3
     assert sum(call.status == "failed" for call in calls) == 2
     assert sum(call.status == "succeeded" for call in calls) == 1
@@ -484,7 +484,7 @@ async def test_body_level_first_byte_retries_immediately_then_reraises(
     assert excinfo.value.code == "first_byte"
     assert [awaited.args[0] for awaited in sleep.await_args_list] == [0.0, 0.0]
     current_run._reap_run.assert_not_awaited()
-    calls = await AgentCall.list_for_run("wf-9")
+    calls = await AgentCall.list_for_run(db_session(), "wf-9")
     assert len(calls) == 3
     assert all(call.status == "failed" for call in calls)
 
@@ -505,7 +505,7 @@ async def test_body_level_invalid_output_retries_once_then_reraises(
     assert sandbox.run_agent.await_count == 2
     sleep.assert_awaited_once_with(0.0)
     current_run._reap_run.assert_not_awaited()
-    calls = await AgentCall.list_for_run("wf-9")
+    calls = await AgentCall.list_for_run(db_session(), "wf-9")
     assert len(calls) == 2
     assert all(call.status == "failed" for call in calls)
 
@@ -572,7 +572,7 @@ async def test_body_level_quota_waits_for_the_reset_once(
         "test.agent.dummy.retry_wait",
         "test.agent.dummy",
     ]
-    calls = await AgentCall.list_for_run("wf-9")
+    calls = await AgentCall.list_for_run(db_session(), "wf-9")
     assert len(calls) == 2
     assert all(call.failure_code == "rate_limited" for call in calls)
 
@@ -622,7 +622,7 @@ async def test_body_level_quota_reset_over_six_hours_reraises_without_sleeping(
     sleep.assert_not_awaited()
     jitter.assert_not_called()
     current_run._reap_run.assert_not_awaited()
-    [call] = await AgentCall.list_for_run("wf-9")
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
     assert call.failure_code == "usage_limit"
 
 
@@ -651,7 +651,7 @@ async def test_body_level_never_retry_errors_run_once(
     sleep.assert_not_awaited()
     current_run._reap_run.assert_not_awaited()
     sandbox.run_agent.assert_awaited_once()
-    assert len(await AgentCall.list_for_run("wf-9")) == 1
+    assert len(await AgentCall.list_for_run(db_session(), "wf-9")) == 1
 
 
 async def test_in_step_transient_retry_uses_asyncio_sleep(monkeypatch, current_run):
@@ -660,7 +660,7 @@ async def test_in_step_transient_retry_uses_asyncio_sleep(monkeypatch, current_r
 
     attempts = 0
 
-    async def run_agent(_self, **_context):
+    async def run_agent(_self, _session, **_context):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -691,7 +691,7 @@ async def test_in_step_quota_reraises_without_sleeping(monkeypatch, current_run)
 
     failure = HarnessRateLimitError("quota")
 
-    async def run_agent(_self, **_context):
+    async def run_agent(_self, _session, **_context):
         raise failure
 
     monkeypatch.setattr(agents.Agent, "_run", run_agent)
@@ -827,8 +827,8 @@ async def test_reused_host_retry_presents_a_stable_idempotency_key(monkeypatch, 
 
     config = SimpleNamespace(secrets={}, secret_refs=[], secrets_id="")
     with pytest.raises(HarnessSandboxProvisioningError):
-        await current_run._lease_host(config)
-    host_id = await current_run._lease_host(config)
+        await current_run._lease_host(db_session(), config)
+    host_id = await current_run._lease_host(db_session(), config)
 
     assert host_id == "warm-host"
     assert keys == ["wf-9:workflow", "wf-9:workflow"]
@@ -886,7 +886,7 @@ async def test_api_key_billing_hands_claude_a_placeholder(
 
     monkeypatch.setattr("druks.sandbox.client.Client.ephemeral", fake_ephemeral)
 
-    await DUMMY_AGENT._run(workflow_id="wf-9")
+    await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
     assert seen == [
         {
@@ -903,7 +903,7 @@ async def test_api_key_billing_hands_claude_a_placeholder(
     assert keys == [f"wf-9:dummy:anthropic.{pasted.updated_at:%Y%m%dT%H%M%S}"]
     config = sandbox.run_agent.await_args.kwargs["config"]
     assert (config.billing, config.subscription) == ("api_key", None)
-    [call] = await AgentCall.list_for_run("wf-9")
+    [call] = await AgentCall.list_for_run(db_session(), "wf-9")
     assert (call.subscription_id, call.api_key.audience_name) == (None, "anthropic")
     row = {column.key: getattr(call, column.key) for column in AgentCall.__table__.columns}
     assert key not in json.dumps(row, default=str)
@@ -975,7 +975,7 @@ async def test_recovery_supersedes_the_orphaned_running_call(druks_db):
         api_key_id=(await installation_key()).id,
     )
 
-    by_id = {call.id: call for call in await AgentCall.list_for_run("wf-9")}
+    by_id = {call.id: call for call in await AgentCall.list_for_run(db_session(), "wf-9")}
     assert by_id["a"].status == "abandoned"
     assert by_id["a"].finished_at is not None
     assert by_id["b"].status == "running"
@@ -991,6 +991,7 @@ async def test_a_replay_resumes_the_ephemeral_box_through_its_identity(
         select(VaultSecret).where(VaultSecret.kind == SecretKind.SUBSCRIPTION)
     )
     identity, _ = await SandboxIdentity.create(
+        db_session(),
         run_id="wf-9",
         scoped_to="dummy",
         secret_refs=[SecretRef(name="anthropic", secret_id=subscription.id)],
@@ -1011,7 +1012,7 @@ async def test_a_replay_resumes_the_ephemeral_box_through_its_identity(
     monkeypatch.setattr("druks.sandbox.client.Client.resume", fake_resume)
     monkeypatch.setattr("druks.sandbox.client.Client.ephemeral", fake_ephemeral)
 
-    result = await DUMMY_AGENT._run(workflow_id="wf-9")
+    result = await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
     assert result == DummyOutput(ok=True)
     assert resumed == ["host-crashed"]
@@ -1024,6 +1025,6 @@ async def test_event_requires_an_artifact(druks_db, tmp_path, monkeypatch, curre
     monkeypatch.setattr(DummyOutput, "to_event", lambda self: {"topic": "review.completed"})
 
     with pytest.raises(WorkflowError, match="without an artifact"):
-        await DUMMY_AGENT._run(workflow_id="wf-9")
+        await DUMMY_AGENT._run(db_session(), workflow_id="wf-9")
 
-    assert (await AgentCall.list_for_run("wf-9"))[0].status == "failed"
+    assert (await AgentCall.list_for_run(db_session(), "wf-9"))[0].status == "failed"

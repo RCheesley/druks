@@ -10,7 +10,7 @@ import httpx
 import pytest
 from druks.accounts.models import Account
 from druks.apps.registry import mcp_servers
-from druks.database import db_session
+from druks.db import db_session
 from druks.mcp import oauth
 from druks.mcp.enums import IdentityMode, TokenSource
 from druks.mcp.exceptions import (
@@ -506,7 +506,7 @@ async def test_reconnect_after_disconnect_creates_a_new_grant(auth_server, druks
     state = dict(parse_qsl(urlparse(url).query))["state"]
     await oauth.complete_connect(druks_db, state=state, code="code-1")
 
-    from druks.database import db_session
+    from druks.db import db_session
 
     db_session().expunge_all()
     # A re-connect creates a new grant. The revoked row stays as history,
@@ -693,7 +693,7 @@ async def test_get_cache_and_refresh_lock_are_per_account(auth_server, druks_db)
 
 
 async def _ref(account_id: str | None = None) -> SecretRef:
-    _, refs = await Workspace.get_mcp_delivery(None, account_id)
+    _, refs = await Workspace.get_mcp_delivery(db_session(), None, account_id)
     return next(ref for ref in refs if ref.name == get_bearer_token_env_var(_NAME).lower())
 
 
@@ -703,7 +703,7 @@ async def test_delivery_binds_the_grant_and_the_row_issues_the_token(
     _register_oauth_server()
     grant = await _store_grant()
 
-    wire, refs = await Workspace.get_mcp_delivery(None, None)
+    wire, refs = await Workspace.get_mcp_delivery(db_session(), None, None)
 
     var = get_bearer_token_env_var(_NAME)
     entry = next(s for s in wire if s.name == _NAME)
@@ -727,7 +727,7 @@ async def test_delivery_fails_loudly_for_an_unconnected_enabled_oauth_server(
     server.identity_mode = IdentityMode.SHARED
 
     with pytest.raises(MissingGrantError, match=_NAME):
-        await Workspace.get_mcp_delivery(None, None)
+        await Workspace.get_mcp_delivery(db_session(), None, None)
 
 
 async def test_delivery_names_the_account_missing_its_per_user_grant(druks_db):
@@ -738,7 +738,7 @@ async def test_delivery_names_the_account_missing_its_per_user_grant(druks_db):
     server.identity_mode = IdentityMode.PER_USER
 
     with pytest.raises(MissingGrantError) as error:
-        await Workspace.get_mcp_delivery(None, account.id)
+        await Workspace.get_mcp_delivery(db_session(), None, account.id)
 
     assert error.value.name == _NAME
     assert error.value.account_id == account.id
@@ -763,7 +763,7 @@ async def test_delivery_with_a_named_account_does_not_use_the_default_account(
     await _store_grant(account_id=default_account.id, identity_mode=IdentityMode.PER_USER)
 
     with pytest.raises(MissingGrantError) as error:
-        await Workspace.get_mcp_delivery(None, named.id)
+        await Workspace.get_mcp_delivery(db_session(), None, named.id)
 
     assert error.value.account_id == named.id
 

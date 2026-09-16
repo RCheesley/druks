@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from conftest import connect_provider
 from druks.core import tasks
-from druks.database import db_session
+from druks.db import db_session
 from druks.durable.engine import _step_engine
 from druks.harnesses.providers import AnthropicProvider
 from druks.sandbox.models import SandboxIdentity, SecretRef
@@ -17,6 +17,7 @@ async def _identity(run_id: str, *, state: str = "running", host_id: str = "") -
         AnthropicProvider, {"claudeAiOauth": {"accessToken": "test-token"}}
     )
     identity, _ = await SandboxIdentity.create(
+        db_session(),
         run_id=run_id,
         scoped_to="workflow",
         secret_refs=[SecretRef(name="anthropic", secret_id=subscription.id)],

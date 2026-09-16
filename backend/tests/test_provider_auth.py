@@ -12,7 +12,7 @@ from drukbox_sdk import SandboxAPI
 from drukbox_sdk.exceptions import SandboxUnavailableError
 from druks.accounts.models import Account
 from druks.core import tasks
-from druks.database import db_session
+from druks.db import db_session
 from druks.harnesses import providers as pbase
 from druks.harnesses.datastructures import ParsedUsage
 from druks.harnesses.exceptions import HarnessNotConnectedError, OAuthTokenError
@@ -638,6 +638,7 @@ async def _bound_identity(
 ) -> SandboxIdentity:
     await seed_run(db_session(), kind=Summarize.kind, run_id=run_id)
     identity, _ = await SandboxIdentity.create(
+        db_session(),
         run_id=run_id,
         scoped_to="workflow",
         secret_refs=[SecretRef(name=name, secret_id=subscription.id, host=host)],
@@ -762,6 +763,7 @@ async def test_a_rotation_requests_a_refresh_for_every_other_live_bound_identity
     await _bound_identity(connection, host_id="host-mine", run_id="run-mine")
     await seed_run(db_session(), kind=Summarize.kind, run_id="run-unbound")
     await SandboxIdentity.create(
+        db_session(),
         run_id="run-unbound",
         scoped_to="workflow",
         secret_refs=[SecretRef(name="anthropic", secret_id=connection.id)],

@@ -9,7 +9,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
 from druks.core.utils.time import ensure_utc
-from druks.database import db_session
 from druks.exceptions import DetachedRowError
 
 if TYPE_CHECKING:
@@ -86,6 +85,7 @@ class StoredSubject(Base):
     async def announce(self, topic: str, **facts: Any) -> None:
         """Record and deliver a domain fact in the current transaction."""
         # The event log is built on this module's Base.
+        from druks.db import db_session
         from druks.events.models import Event
 
         await Event.announce(db_session(), self, topic, facts)
@@ -95,7 +95,7 @@ class StoredSubject(Base):
         """The row this subject id names. A subject id is free text and reaches the
         read-side straight off a URL, so an id this table could never hold is a miss
         rather than an error."""
-        from druks.database import db_session
+        from druks.db import db_session
 
         try:
             key = int(subject_id)
@@ -122,31 +122,36 @@ class StoredSubject(Base):
         )
 
     async def get_status(self, *, workflow: "type[Workflow] | None" = None) -> "SubjectStatus":
+        from druks.db import db_session
         from druks.durable.reads import get_subject_status
 
-        return await get_subject_status(self.subject_type, str(self.id), workflow=workflow)
+        return await get_subject_status(
+            db_session(), self.subject_type, str(self.id), workflow=workflow
+        )
 
     @classmethod
     async def get_statuses(cls, subject_ids: Sequence[str | int]) -> "dict[str, SubjectStatus]":
         """Where a whole board stands, keyed by subject id — one read for the whole
         board, so a page listing rows does not ask once per row."""
+        from druks.db import db_session
         from druks.durable.reads import get_subject_statuses
 
         return await get_subject_statuses(
-            cls.subject_type, [str(subject_id) for subject_id in subject_ids]
+            db_session(), cls.subject_type, [str(subject_id) for subject_id in subject_ids]
         )
 
     async def get_phase(self) -> str | None:
+        from druks.db import db_session
         from druks.durable.reads import get_subject_phase
 
-        return await get_subject_phase(self.subject_type, str(self.id))
+        return await get_subject_phase(db_session(), self.subject_type, str(self.id))
 
     @classmethod
     async def list_open(cls, *, limit: int = 50) -> list[Self]:
         """The rows whose newest run hasn't handed off — still going, or failed
         and wanting the operator. What an app's active view lists."""
         # Cycle: the durable read side is built on this module's Base.
-        from druks.database import db_session
+        from druks.db import db_session
         from druks.durable.models import Run
 
         # The durable layer keys subjects by string, so the open ids come back as

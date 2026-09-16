@@ -13,7 +13,7 @@ from druks import agents
 from druks.accounts.models import Account
 from druks.apps import App
 from druks.apps.registry import agents as agent_registry
-from druks.database import db_session
+from druks.db import db_session
 from druks.durable.models import AgentCall
 from druks.harnesses.claude import ClaudeHarness
 from druks.harnesses.codex import CodexHarness
@@ -113,7 +113,7 @@ async def test_call_keeps_its_billing_reference_after_disconnect(druks_db, billi
         assert call.api_key_id == key.id
         assert (await _key()).id == key.id
 
-    assert (await AgentCall.get(call.id)).id == call.id
+    assert (await AgentCall.get(druks_db, call.id)).id == call.id
 
 
 @pytest.mark.parametrize("both", [False, True])

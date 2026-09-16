@@ -1,7 +1,7 @@
 import json
 from unittest import mock
 
-from druks.database import db_session
+from druks.db import db_session
 from druks.durable.reads import get_agent_call_files
 from druks.harnesses.artifacts import persist_manifest
 from druks.harnesses.base import Harness
@@ -31,7 +31,7 @@ async def _build(
     harness = harness or ClaudeHarness(
         model="anthropic/claude-opus-4-8", fast_mode=False, effort=None
     )
-    return await harness.get_manifest(mcp_servers=mcp_servers, skills=skills)
+    return await harness.get_manifest(db_session(), mcp_servers=mcp_servers, skills=skills)
 
 
 async def _seed_skills(*names: str, disabled: tuple[str, ...] = ()) -> None:
@@ -220,7 +220,7 @@ async def test_manifest_surfaces_in_agent_call_files(tmp_path, druks_db):
     manifest = await _build()
     with mock.patch("druks.durable.models.load_settings", return_value=make_settings(tmp_path)):
         persist_manifest(call.call_dir.parent, call_id=call.call_dir.name, manifest=manifest)
-        files = await get_agent_call_files(call.id)
+        files = await get_agent_call_files(druks_db, call.id)
 
     assert files.manifest
     assert files.manifest.name == "manifest.json"
