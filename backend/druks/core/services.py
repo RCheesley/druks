@@ -21,8 +21,7 @@ class Github(Service):
     # The Drukbox catalog name a box holds this identity's token under.
     secret_name = "github"
     description = (
-        "The GitHub App druks acts as — it receives webhooks and writes branches, "
-        "pull requests, and comments. Create it from here, or paste an existing "
+        "The GitHub App druks acts as. Create it from here, or paste an existing "
         "App's credentials from the GitHub developer settings page."
     )
     # What the created App is: the single operator identity documented in
@@ -42,6 +41,8 @@ class Github(Service):
         "default_permissions": {
             "metadata": "read",
             "contents": "write",
+            # Generating a repo from a template is Administration, not Contents.
+            "administration": "write",
             "pull_requests": "write",
             "issues": "write",
             "checks": "read",
