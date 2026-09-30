@@ -13,12 +13,14 @@ from druks.ui import (
     EmptyState,
     Fact,
     Facts,
+    Image,
     Link,
     List,
     Metric,
     Metrics,
     NumberValue,
     Page,
+    Section,
     Stack,
     StatusValue,
     Table,
@@ -272,6 +274,26 @@ def test_layout_blocks_hold_every_block_including_each_other():
     assert columns["blocks"][1]["blocks"][0]["text"] == "nested"
 
 
+def test_split_columns_are_exactly_two_panes():
+    (columns,) = wire(Columns([Text("threads"), Text("reading")], layout="split"))
+
+    assert columns["layout"] == "split"
+    with pytest.raises(ValueError, match="two panes"):
+        Columns([Text("only")], layout="split")
+
+
+def test_split_columns_are_the_page():
+    def panes():
+        return Columns([Text("threads"), Text("reading")], layout="split")
+
+    page = Page("Inbox", blocks=[panes()])
+    assert page.blocks[0].block == "columns"
+    with pytest.raises(ValueError, match="the page"):
+        Page("Inbox", blocks=[Text("above"), panes()])
+    with pytest.raises(ValueError, match="the page"):
+        Page("Inbox", blocks=[Section(blocks=[panes()])])
+
+
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_a_number_must_be_one_json_can_carry(bad):
     with pytest.raises(ValueError):
@@ -344,6 +366,23 @@ def test_cards_carries_stack_layout_drop_and_card_drag():
     assert block["drop"]["operation"] == "move_peer"
     assert block["drop"]["arguments"] == {"status": "todo"}
     assert block["cards"][0]["drag"] == {"identifier": "P-7"}
+
+
+def test_cards_tiles_carry_the_image_the_shell_crops():
+    (block,) = wire(
+        Cards(
+            layout="tiles",
+            cards=[
+                Card(
+                    title="Ada Cafe",
+                    blocks=[Image(url="/api/files/shot", alternative_text="The shopfront.")],
+                )
+            ],
+        )
+    )
+
+    assert block["layout"] == "tiles"
+    assert block["cards"][0]["blocks"][0]["url"] == "/api/files/shot"
 
 
 def test_cards_with_none_and_nothing_to_say_carries_no_empty_state():
