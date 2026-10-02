@@ -1,6 +1,7 @@
 import httpx
+from githubkit.exception import RequestFailed
 
-from druks.core.apis.exceptions import UnknownTicketError
+from druks.core.apis.exceptions import GitHubAppNotInstalledError, UnknownTicketError
 from druks.core.apis.github import GitHubClient
 from druks.core.services import Github
 
@@ -31,15 +32,15 @@ class GitHub(Tracker):
     a build claims the issue, so a later re-label opens a fresh build.
     """
 
-    known_exceptions = (UnknownTicketError, httpx.HTTPError)
+    known_exceptions = (
+        UnknownTicketError,
+        GitHubAppNotInstalledError,
+        RequestFailed,
+        httpx.HTTPError,
+    )
 
-    def __init__(
-        self,
-        *,
-        status_names: dict[TicketStatus, str],
-        client: GitHubClient | None = None,
-    ) -> None:
-        self._client = client
+    def __init__(self, *, status_names: dict[TicketStatus, str]) -> None:
+        self._client: GitHubClient | None = None
         # An empty name leaves that status unmapped.
         self._status_names = {status: name for status, name in status_names.items() if name}
 
@@ -49,11 +50,6 @@ class GitHub(Tracker):
         if self._client is None:
             self._client = await Github.get_client()
         return self._client
-
-    async def get_account_id(self, user_id: str) -> str | None:
-        # No grant issuer vouches for a GitHub login, so it cannot resolve to a
-        # Druks account the way a Linear or Jira user id does.
-        return None
 
     async def set_status(self, key: str, status: TicketStatus) -> None:
         label = self._status_names.get(status)
@@ -71,5 +67,6 @@ class GitHub(Tracker):
             await client.set_issue_state(repo, number, state="closed", state_reason="completed")
 
     async def aclose(self) -> None:
-        # A client we were handed belongs to the caller; only close our own.
-        return
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None

@@ -15,10 +15,16 @@ from druks.contrib.software_factory.ticketing.github import GitHub
 from druks.contrib.software_factory.ticketing.jira import Jira
 from druks.contrib.software_factory.ticketing.linear import Linear
 from druks.core import services
-from druks.core.apis.exceptions import JiraAPIError, LinearAPIError, UnknownTicketError
+from druks.core.apis.exceptions import (
+    GitHubAppNotInstalledError,
+    JiraAPIError,
+    LinearAPIError,
+    UnknownTicketError,
+)
 from druks.core.apis.jira import JiraClient
 from druks.core.apis.linear import LinearClient
 from druks.services import ServiceConnectError
+from githubkit.exception import RequestFailed
 
 from software_factory.factories import make_test_work_item
 
@@ -694,9 +700,17 @@ class _FakeGitHubClient:
     async def set_issue_state(self, repo, issue_number, *, state, state_reason=None):
         self.calls.append(("state", repo, issue_number, state, state_reason))
 
+    async def aclose(self):
+        self.calls.append(("aclose",))
 
-def _github_tracker(**status_names):
+
+def _github_tracker(monkeypatch, **status_names):
     fake = _FakeGitHubClient()
+
+    async def get_client(cls):
+        return fake
+
+    monkeypatch.setattr(services.Github, "get_client", classmethod(get_client))
     names = {
         TicketStatus.TRIGGER: "ready-for-agent",
         TicketStatus.IN_PROGRESS: "agent:in-progress",
@@ -705,11 +719,11 @@ def _github_tracker(**status_names):
         TicketStatus.BACKLOG: "",
     }
     names.update({TicketStatus(status): name for status, name in status_names.items()})
-    return GitHub(status_names=names, client=fake), fake
+    return GitHub(status_names=names), fake
 
 
-async def test_github_set_status_swaps_the_label_within_an_exclusive_group():
-    tracker, fake = _github_tracker()
+async def test_github_set_status_swaps_the_label_within_an_exclusive_group(monkeypatch):
+    tracker, fake = _github_tracker(monkeypatch)
 
     await tracker.set_status("acme/widget#7", TicketStatus.IN_PROGRESS)
 
@@ -726,8 +740,8 @@ async def test_github_set_status_swaps_the_label_within_an_exclusive_group():
     ]
 
 
-async def test_github_set_status_clears_the_trigger_label_so_a_relabel_can_retrigger():
-    tracker, fake = _github_tracker()
+async def test_github_set_status_clears_the_trigger_label_so_a_relabel_can_retrigger(monkeypatch):
+    tracker, fake = _github_tracker(monkeypatch)
 
     await tracker.set_status("acme/widget#7", TicketStatus.IN_PROGRESS)
 
@@ -735,32 +749,32 @@ async def test_github_set_status_clears_the_trigger_label_so_a_relabel_can_retri
     assert "ready-for-agent" in removed
 
 
-async def test_github_done_closes_the_issue_as_completed():
-    tracker, fake = _github_tracker()
+async def test_github_done_closes_the_issue_as_completed(monkeypatch):
+    tracker, fake = _github_tracker(monkeypatch)
 
     await tracker.set_status("acme/widget#7", TicketStatus.DONE)
 
     assert ("state", "acme/widget", 7, "closed", "completed") in fake.calls
 
 
-async def test_github_non_terminal_status_leaves_the_issue_open():
-    tracker, fake = _github_tracker()
+async def test_github_non_terminal_status_leaves_the_issue_open(monkeypatch):
+    tracker, fake = _github_tracker(monkeypatch)
 
     await tracker.set_status("acme/widget#7", TicketStatus.IN_REVIEW)
 
     assert not [call for call in fake.calls if call[0] == "state"]
 
 
-async def test_github_an_unmapped_status_raises():
-    tracker, _ = _github_tracker()
+async def test_github_an_unmapped_status_raises(monkeypatch):
+    tracker, _ = _github_tracker(monkeypatch)
 
     # BACKLOG is unnamed by default: an empty resting label leaves the issue put.
     with pytest.raises(ValueError, match="no configured label"):
         await tracker.set_status("acme/widget#7", TicketStatus.BACKLOG)
 
 
-async def test_github_rejects_a_key_without_a_repo_qualifier():
-    tracker, _ = _github_tracker()
+async def test_github_rejects_a_key_without_a_repo_qualifier(monkeypatch):
+    tracker, _ = _github_tracker(monkeypatch)
 
     # Issue numbers repeat across repositories, so a bare number is ambiguous
     # and must not be guessed at.
@@ -770,15 +784,21 @@ async def test_github_rejects_a_key_without_a_repo_qualifier():
         await tracker.set_status("acme/widget#not-a-number", TicketStatus.DONE)
 
 
-async def test_github_does_not_resolve_a_login_to_an_account():
-    # No grant issuer vouches for a GitHub login, so it never selects an account.
-    tracker, _ = _github_tracker()
+async def test_github_closes_the_client_it_created(monkeypatch):
+    tracker, fake = _github_tracker(monkeypatch)
 
-    assert await tracker.get_account_id("octocat") is None
+    async with tracker:
+        await tracker.set_status("acme/widget#7", TicketStatus.IN_REVIEW)
+
+    assert fake.calls[-1] == ("aclose",)
 
 
 def test_github_declares_known_exceptions():
+    # The GitHub client raises githubkit's errors, not httpx's. A caller that
+    # misses them lets a failed label write fail the webhook that caused it.
     assert UnknownTicketError in GitHub.known_exceptions
+    assert GitHubAppNotInstalledError in GitHub.known_exceptions
+    assert RequestFailed in GitHub.known_exceptions
     assert httpx.HTTPError in GitHub.known_exceptions
 
 
