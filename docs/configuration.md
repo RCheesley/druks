@@ -431,9 +431,16 @@ its intake. An issue that gains the trigger label opens a build.
 Set the five labels in **Software Factory → Settings**. They default to the
 Linear status names, so name them for GitHub before you select this tracker - for
 example `ready-for-agent`, `agent:in-progress`, `agent:in-review`, and
-`agent:done`. Create each label in the repository first: GitHub rejects a label
-that does not exist. An empty in review or resting label leaves the issue where
-it is, as it does on Linear and Jira.
+`agent:done`. If a label does not exist in the repository, GitHub creates it the
+first time Druks sets it, with a default colour and no description. Create the
+labels first if you want to choose those. An empty in review or resting label
+leaves the issue where it is, as it does on Linear and Jira.
+
+A label opens a build only when a person adds it, or when Druks adds it itself
+through the agent `start` route. A label another App or bot adds is ignored.
+Adding a label on GitHub needs triage access or higher. The issue's repository
+must be registered in a Software Factory project: the build opens its pull
+request there, and a label never routes the issue to another repository.
 
 The labels behave as one exclusive group. Setting any of them removes the others,
 including the trigger label - so an issue never reads as two states at once, and
@@ -442,7 +449,8 @@ closes the issue as completed, which is what a GitHub reader expects finished
 work to look like.
 
 Three differences from Linear and Jira are worth knowing. A ticket key is
-`owner/repo#number`, because issue numbers repeat across repositories. The
+`owner/repo#number`, because issue numbers repeat across repositories. Encode
+the `#` as `%23` when the key goes in a URL path. The
 settings page lists no label choices, because labels are per repository rather
 than per workspace, so you type them. And a build never runs as the issue
 assignee: a GitHub login is not an identity any grant issuer vouches for, so
