@@ -1,11 +1,7 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/czpython/druks/main/docs/assets/logo/web/DruksLogo_White.svg" />
-    <img src="https://raw.githubusercontent.com/czpython/druks/main/docs/assets/logo/web/DruksLogo_Black.svg" alt="Druks" width="140" />
-  </picture>
-</p>
-
-# Druks
+<h1 align="center">
+  <img src="frontend/public/brand-mark.svg" alt="Dragon head" width="72" height="72" align="middle" />
+  druks
+</h1>
 
 > [!WARNING]
 > Druks is under active development. Breaking changes and rough edges can occur
