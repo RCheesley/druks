@@ -142,6 +142,7 @@ async def test_a_label_becomes_a_ticket_transition(monkeypatch):
                     "project_name": "acme/widget",
                     "labels": [],
                     # A login is not an address and selects no account.
+                    "actor_id": None,
                     "assignee_id": None,
                     "assignee_email": None,
                     "assignee_name": "octocat",

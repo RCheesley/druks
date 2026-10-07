@@ -570,9 +570,9 @@ Three differences from Linear and Jira are worth knowing. A ticket key is
 `owner/repo#number`, because issue numbers repeat across repositories. Encode
 the `#` as `%23` when the key goes in a URL path. The
 settings page lists no label choices, because labels are per repository rather
-than per workspace, so you type them. And a build never runs as the issue
-assignee: a GitHub login is not an identity any grant issuer vouches for, so
-every GitHub build uses the default account.
+than per workspace, so you type them. And a build never runs as the person who
+added the label or as the issue assignee: a GitHub login is not an identity any
+grant issuer vouches for, so every GitHub build uses the default account.
 
 The App must subscribe to the **issues** event. An App created through
 **Settings → Connections → Services → Create GitHub App** subscribes to it. An

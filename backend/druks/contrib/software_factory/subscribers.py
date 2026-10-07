@@ -96,6 +96,7 @@ async def issue_label_transitions_the_ticket(*, repo: str, number: int, payload:
             "labels": [],
             # A login is not an address, and no grant issuer vouches for it, so it
             # selects no account. The name is for display only.
+            "actor_id": None,
             "assignee_id": None,
             "assignee_email": None,
             "assignee_name": payload["assignee"],
