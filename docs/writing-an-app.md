@@ -206,8 +206,9 @@ class BuildSite(Workflow):
     sandbox = Sandbox(setup="sandboxes/build.sh")
 ```
 
-Place the file at `site_builder/sandboxes/build.sh`. The path is relative to the
-app package.
+Place the file at `site_builder/sandboxes/build.sh`, beside
+`site_builder/workflows.py`. The path is relative to the folder of the module
+that declares the workflow.
 
 Druks reads the raw bytes. It does not render
 the file or run it during import. Drukbox builds a reusable template from the
@@ -652,9 +653,10 @@ call from outside a conversation.
 
 A run that a bot tool starts remembers its conversation. Ask for approval with
 an in-app question, `self.review()`. Druks then asks the connection's admin in the
-admin's own chat, and only that admin can answer. When a run that waited ends,
-Druks tells the conversation the run's result or its failure, and the Bot tells
-the person. A cancelled run tells nothing.
+admin's own chat, and only that admin can answer. When the run ends, Druks tells
+the conversation its failure, or its result if it waited or returned one, and the
+Bot tells the person. A run that never waits and returns nothing tells the person
+only of a failure. A cancelled run tells nothing.
 
 To withdraw a waiting request, cancel it in a bot tool:
 `await GrantAccess.cancel(request)`. A subject has one active run per workflow, so

@@ -18,9 +18,10 @@ const PROFILE_PATH = path.join(SESSION_ROOT, "profile");
 // Chromium-vs-Chrome brand split, and the switches and debugger of a driver.
 const CHROME_PATH = "/opt/google/chrome/chrome";
 const CDP_URL = "http://127.0.0.1:9222";
-// The proxy for the login only. druks sets it only when the operator gives one.
+const DISPLAY_SOCKET = "/tmp/.X11-unix/X99";
+// The egress proxy. druks sets it for the launches its proxy scope covers.
 // If it is empty, the browser uses the box IP.
-const loginProxy = process.env.DRUKS_BROWSER_LOGIN_PROXY;
+const egressProxy = process.env.DRUKS_BROWSER_PROXY;
 const RUNTIME_PATH = path.join(SESSION_ROOT, ".runtime");
 const PID_PATH = path.join(RUNTIME_PATH, "launcher.pid");
 const READY_PATH = path.join(RUNTIME_PATH, "ready.json");
@@ -86,7 +87,7 @@ function unpackProfileArchive(meta) {
 function startProxyRelay(proxy) {
   if (!["http:", "https:"].includes(proxy.protocol)) {
     throw new Error(
-      `Chrome cannot send a password to a ${proxy.protocol}// proxy. Use an http or https login proxy.`,
+      `Chrome cannot send a password to a ${proxy.protocol}// proxy. Use an http or https proxy.`,
     );
   }
   const client = proxy.protocol === "https:" ? https : http;
@@ -128,6 +129,31 @@ function startProxyRelay(proxy) {
   return new Promise((resolve) => {
     relay.listen(0, "127.0.0.1", () => resolve(relay));
   });
+}
+
+// The box starts no display, so a headed launch starts its own.
+async function startDisplay() {
+  spawn("Xvfb", [":99", "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-ac"], {
+    detached: true,
+    stdio: "ignore",
+  }).unref();
+  // VNC listens on loopback only, and SSH is the only way in, so it needs no
+  // password. -loop retries until the display exists.
+  spawn(
+    "x11vnc",
+    [
+      "-display", ":99", "-loop", "-forever", "-listen", "127.0.0.1", "-rfbport", "5900",
+      "-nopw", "-noxdamage", "-shared",
+    ],
+    { detached: true, stdio: "ignore" },
+  ).unref();
+  const deadline = Date.now() + 10000;
+  while (!fs.existsSync(DISPLAY_SOCKET)) {
+    if (Date.now() > deadline) {
+      throw new Error("Xvfb did not open display :99");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 async function debuggerVersion(chrome) {
@@ -193,9 +219,11 @@ async function main() {
     ];
     if (headless) {
       args.push("--headless=new");
+    } else {
+      await startDisplay();
     }
-    if (loginProxy) {
-      const proxy = new URL(loginProxy);
+    if (egressProxy) {
+      const proxy = new URL(egressProxy);
       let proxyServer = `${proxy.protocol}//${proxy.host}`;
       if (proxy.username || proxy.password) {
         relay = await startProxyRelay(proxy);

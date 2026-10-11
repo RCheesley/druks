@@ -1,5 +1,7 @@
 import json
+import shlex
 from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 
 import pytest
 from druks.browser import sessions as sessions_module
@@ -48,7 +50,7 @@ class FakeBrowser:
 
     async def exec(self, command, *, timeout=None):
         self.commands.append(command)
-        if command[0] == "session-export":
+        if command[0] == "/work/session/session-export":
             self.files["/work/session/out/state.tar.gz"] = b"exported-profile"
             return ExecResult(exit_code=self.export_exit, stdout="", stderr="export stderr")
         return ExecResult(exit_code=self.launch_exit, stdout="", stderr="launch stderr")
@@ -71,13 +73,16 @@ def borrow(druks_db, tmp_path, monkeypatch):
     browser = FakeBrowser()
 
     @asynccontextmanager
-    async def ephemeral(*, image_override, provider):
-        browser.image = image_override
+    async def ephemeral(*, provider, template):
         browser.provider = provider
+        browser.template = template
         yield browser
 
     monkeypatch.setattr(
         sessions_module, "sandbox_client", type("Client", (), {"ephemeral": ephemeral})
+    )
+    monkeypatch.setattr(
+        sessions_module, "get_template_id", AsyncMock(return_value="browser-template")
     )
     return browser
 
@@ -147,8 +152,8 @@ async def test_borrow_yields_a_tunneled_cdp_url(borrow, night_watch):
         assert cdp_url == "http://127.0.0.1:43987"
 
     assert browser.forwarded_port == 9222
-    assert browser.image == "ghcr.io/czpython/druks/browser:latest"
     assert browser.provider == "docker"
+    assert browser.template == "browser-template"
     assert browser.files["/work/session/state.json"] == b"stored-state"
     assert json.loads(browser.files["/work/session/state.meta.json"]) == {
         "format": "storage_state",
@@ -175,6 +180,44 @@ async def test_headless_declaration_launches_headless(borrow):
     assert "session-launch --headless >/work/session/launch.log" in browser.commands[0][2]
 
 
+async def test_borrow_launch_routes_through_the_proxy_when_the_scope_is_all(
+    borrow, night_watch, tmp_path, monkeypatch
+):
+    browser = borrow
+    proxy = "http://172.17.0.1:8888"
+    settings = make_settings(
+        tmp_path,
+        browser={"proxy": proxy, "proxy_scope": "all", "timezone": "Europe/Madrid"},
+    )
+    monkeypatch.setattr(sessions_module, "load_settings", lambda: settings)
+    await stored_session(night_watch.docs)
+
+    async with night_watch.docs.cdp():
+        pass
+
+    command = browser.commands[0][2]
+    assert f"DRUKS_BROWSER_PROXY={shlex.quote(proxy)}" in command
+    assert "TZ=Europe/Madrid" in command
+
+
+async def test_borrow_launch_keeps_the_box_ip_under_the_login_scope(
+    borrow, night_watch, tmp_path, monkeypatch
+):
+    browser = borrow
+    settings = make_settings(
+        tmp_path, browser={"proxy": "http://172.17.0.1:8888", "timezone": "Europe/Madrid"}
+    )
+    monkeypatch.setattr(sessions_module, "load_settings", lambda: settings)
+    await stored_session(night_watch.docs)
+
+    async with night_watch.docs.cdp():
+        pass
+
+    command = browser.commands[0][2]
+    assert "DRUKS_BROWSER_PROXY" not in command
+    assert "TZ=" not in command
+
+
 async def test_persisting_borrow_locks_exports_and_stores(borrow, night_watch):
     browser = borrow
     row = await stored_session(night_watch.acme)
@@ -183,7 +226,7 @@ async def test_persisting_borrow_locks_exports_and_stores(borrow, night_watch):
         assert await writer_locks()
 
     assert not await writer_locks()
-    assert browser.commands[-1] == ["session-export"]
+    assert browser.commands[-1] == ["/work/session/session-export"]
     db_session().expunge_all()
     stored = await StoredBrowserSession.get_for_name(db_session(), night_watch.acme.name)
     assert stored.payload.decrypt() == b"exported-profile"
@@ -253,7 +296,7 @@ async def test_signed_out_borrow_stamps_the_session_and_stores_nothing(borrow, n
     assert (
         await StoredBrowserSession.get_for_name(db_session(), night_watch.acme.name)
     ).payload.decrypt() == b"live-state"
-    assert ["session-export"] not in browser.commands
+    assert ["/work/session/session-export"] not in browser.commands
     assert not await writer_locks()  # the writer lock released on the way out
 
 
@@ -265,12 +308,16 @@ async def test_anonymous_borrow_needs_no_login(borrow, night_watch):
     async with night_watch.status_page.cdp() as cdp_url:
         assert cdp_url == "http://127.0.0.1:43987"
 
-    assert list(browser.files) == ["/work/session/state.meta.json"]
+    assert sorted(browser.files) == [
+        "/work/session/session-export",
+        "/work/session/session-launch",
+        "/work/session/state.meta.json",
+    ]
     assert json.loads(browser.files["/work/session/state.meta.json"]) == {
         "format": "profile_dir",
         "version": 0,
     }
-    assert ["session-export"] not in browser.commands
+    assert ["/work/session/session-export"] not in browser.commands
     assert not await writer_locks()  # no writer lock: nothing to serialize
     row = await StoredBrowserSession.get_for_name(db_session(), night_watch.status_page.name)
     assert row.status == BrowserSessionStatus.ANONYMOUS.value

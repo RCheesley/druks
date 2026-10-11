@@ -2,6 +2,7 @@ import json
 import shlex
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from druks.accounts.dependencies import require_operator
@@ -34,7 +35,7 @@ class FakeSandbox:
         if command[:2] == ["sh", "-c"] and "session-launch --headed" in command[2]:
             self.launch_command = command[2]
             self.files["/work/session/.runtime/ready.json"] = b"{}\n"
-        if command == ["session-export"]:
+        if command == ["/work/session/session-export"]:
             if self.export_exit_code:
                 return ExecResult(exit_code=self.export_exit_code, stdout="", stderr="failed")
             self.files[OUTPUT_STATE_PATH] = self.export_payload
@@ -57,8 +58,8 @@ class FakeSandboxClient:
         self.provisions: list[dict[str, str]] = []
         self.released: list[str] = []
 
-    async def provision(self, *, image_override: str, provider: str) -> FakeSandbox:
-        self.provisions.append({"image_override": image_override, "provider": provider})
+    async def provision(self, *, provider: str, template: str) -> FakeSandbox:
+        self.provisions.append({"provider": provider, "template": template})
         browser = FakeSandbox(f"browser-{len(self.browsers) + 1}")
         self.browsers.append(browser)
         return browser
@@ -77,6 +78,7 @@ def window_runtime(tmp_path, monkeypatch):
     client = FakeSandboxClient()
     monkeypatch.setattr(login, "sandbox_client", client)
     monkeypatch.setattr(login, "load_settings", lambda: settings)
+    monkeypatch.setattr(login, "get_template_id", AsyncMock(return_value="browser-template"))
     return client
 
 
@@ -95,7 +97,7 @@ async def test_login_launch_leaves_the_box_untouched_when_nothing_is_set(window_
     await LoginWindow.open(await create_session())
 
     command = client.browsers[0].launch_command or ""
-    assert "DRUKS_BROWSER_LOGIN_PROXY" not in command
+    assert "DRUKS_BROWSER_PROXY" not in command
     assert "TZ=" not in command
 
 
@@ -109,26 +111,27 @@ async def test_login_launch_opens_on_the_session_site(window_runtime):
     assert "--drive" not in command
 
 
-def _runtime_with_sandbox(tmp_path, monkeypatch, **sandbox) -> FakeSandboxClient:
-    settings = make_settings(tmp_path, sandbox=sandbox)
+def _runtime_with_browser(tmp_path, monkeypatch, **browser) -> FakeSandboxClient:
+    settings = make_settings(tmp_path, browser=browser)
     client = FakeSandboxClient()
     monkeypatch.setattr(login, "sandbox_client", client)
     monkeypatch.setattr(login, "load_settings", lambda: settings)
+    monkeypatch.setattr(login, "get_template_id", AsyncMock(return_value="browser-template"))
     return client
 
 
 async def test_login_launch_routes_through_the_configured_proxy(tmp_path, monkeypatch):
     proxy = "http://172.17.0.1:8888"
-    client = _runtime_with_sandbox(tmp_path, monkeypatch, browser_login_proxy=proxy)
+    client = _runtime_with_browser(tmp_path, monkeypatch, proxy=proxy)
 
     await LoginWindow.open(await create_session())
 
     command = client.browsers[0].launch_command or ""
-    assert f"DRUKS_BROWSER_LOGIN_PROXY={shlex.quote(proxy)}" in command
+    assert f"DRUKS_BROWSER_PROXY={shlex.quote(proxy)}" in command
 
 
 async def test_login_launch_sets_the_configured_timezone(tmp_path, monkeypatch):
-    client = _runtime_with_sandbox(tmp_path, monkeypatch, browser_login_tz="Europe/Madrid")
+    client = _runtime_with_browser(tmp_path, monkeypatch, timezone="Europe/Madrid")
 
     await LoginWindow.open(await create_session())
 
@@ -138,7 +141,7 @@ async def test_login_launch_sets_the_configured_timezone(tmp_path, monkeypatch):
 
 async def test_login_launch_quotes_values_so_a_bad_one_cannot_inject(tmp_path, monkeypatch):
     proxy = "http://h:8888; rm -rf /"
-    client = _runtime_with_sandbox(tmp_path, monkeypatch, browser_login_proxy=proxy)
+    client = _runtime_with_browser(tmp_path, monkeypatch, proxy=proxy)
 
     await LoginWindow.open(await create_session())
 
@@ -162,9 +165,7 @@ async def test_open_seeds_a_blank_profile_and_records_the_container(window_runti
     assert STATE_PATH not in browser.files
     assert PROFILE_PATH not in browser.files
     assert (await LoginWindow.get_for_session(session.name)).host_id == browser.id
-    assert client.provisions == [
-        {"image_override": "ghcr.io/czpython/druks/browser:latest", "provider": "docker"}
-    ]
+    assert client.provisions == [{"provider": "docker", "template": "browser-template"}]
 
 
 async def test_reopening_disposes_the_previous_window(window_runtime):
