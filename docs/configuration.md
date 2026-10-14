@@ -487,11 +487,12 @@ Select the tracker in **Software Factory → Settings**. The default is Linear.
 **Linear** and **Jira** are service identities. Connect them from
 **Settings → Connections → Services**. The Linear identity uses an API key
 and webhook secret. The Jira identity uses a base URL, email, API token, and
-webhook secret. Druks validates the credentials before it stores them. Linear,
-Jira, and GitHub share five status settings: trigger, in progress, in review,
-done, and resting. When the selected tracker is connected and lists its statuses,
-the settings page offers them as choices. After you change the tracker, save the
-settings to list the statuses of the new tracker. An empty in review or resting
+webhook secret. For an Atlassian service account, the email is its address at
+`serviceaccount.atlassian.com`. Druks validates the credentials before it
+stores them. Linear, Jira, and GitHub share five status settings: trigger, in
+progress, in review, done, and resting. When the selected tracker is connected
+and lists its statuses, the settings page offers them as choices. After you
+change the tracker, save the settings to list the statuses of the new tracker. An empty in review or resting
 status leaves the ticket where it is.
 
 Select **druks** to use the ticket board on this appliance. That choice needs no
@@ -804,6 +805,7 @@ before provisioning a VM if its selected credential is missing.
 | `sandbox.image` | Optional provider image override |
 | `sandbox.registry_host`, `sandbox.registry_username`, `sandbox.registry_password` | Access to private sandbox images on one registry host, for example `ghcr.io`. Set the three together. The password is the secret [`REGISTRY_PASSWORD`](#secrets-of-an-installation). See [Drukbox](https://github.com/czpython/drukbox/blob/main/docs/deploy.md#private-image-registry) |
 | `sandbox.template_repository` | The repository path on that host where Drukbox publishes sandbox templates. The exe provider requires it |
+| `[sandbox.host_limits]` | Hosts per provider, one `<provider> = <count>` line each, for example `exe = 28`. A provider not named has no limit. At the limit Drukbox refuses a create, and the run waits for a slot in the phase `queued_for_vm`, up to one host lease |
 | `sandbox.proxy_url` | The secrets proxy, at the address a sandbox dials. The docker shape sets `http://172.17.0.1:8880`. docker-sbx leaves it empty |
 | `sandbox.issuer_url` | The issuer base URL the secrets exchange dials. The default is `http://127.0.0.1:8001`. For a Drukbox on another server, set the address of the Druks host that Drukbox reaches. The installer then serves the issuer route there ([the issuer listener](deployment.md#the-issuer-listener)) |
 
@@ -925,7 +927,12 @@ is one of:
   key. An account that has set no key gets the server left out of its sandbox.
 - An OAuth connection, which requires `urls.endpoint`. The provider redirects
   to `<endpoint>/api/mcp-servers/oauth/callback`. A provider that allow-lists
-  redirect hosts, such as Atlassian, must list that URL.
+  redirect hosts, such as Atlassian, must list that URL. **Connect for
+  everyone** makes one connection that every run uses. While such an enabled
+  server has no connection, every run fails. **Connect your account** makes
+  each account connect its own. An account that has not connected the server
+  gets it left out of its sandbox. The run's agent call manifest records the
+  server as declared but not delivered.
 
 A service can own the host of an OAuth server: GitHub owns
 `api.githubcopilot.com`, Jira owns `mcp.atlassian.com`, and Linear owns

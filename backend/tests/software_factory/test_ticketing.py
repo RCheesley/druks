@@ -19,10 +19,12 @@ from druks.core.apis.exceptions import (
     GitHubAppNotInstalledError,
     JiraAPIError,
     LinearAPIError,
+    TicketNotMovableError,
     UnknownTicketError,
 )
 from druks.core.apis.jira import JiraClient
 from druks.core.apis.linear import LinearClient
+from druks.secrets.models import VaultSecret
 from druks.services import ServiceConnectError
 from githubkit.exception import RequestFailed
 
@@ -209,13 +211,16 @@ async def test_linear_verify_rejects_a_bad_key_without_echoing(monkeypatch):
 async def test_jira_verify_stores_the_display_name(monkeypatch):
     seen = []
 
-    async def fake_get(self, url, **kwargs):
-        seen.append(url)
-        return httpx.Response(
-            200, json={"displayName": "Druks Bot"}, request=httpx.Request("GET", url)
+    async def fake_request(self, method, url, **kwargs):
+        seen.append(str(url))
+        body = (
+            {"cloudId": "cloud-1"}
+            if url.endswith("/_edge/tenant_info")
+            else {"displayName": "Druks Bot"}
         )
+        return httpx.Response(200, json=body, request=httpx.Request(method, url))
 
-    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
 
     facts = await services.Jira.verify(
         services.Jira.Settings(
@@ -224,14 +229,21 @@ async def test_jira_verify_stores_the_display_name(monkeypatch):
     )
 
     assert facts == {"display_name": "Druks Bot"}
-    assert seen == ["https://jira.test/rest/api/3/myself"]
+    assert seen == [
+        "https://jira.test/_edge/tenant_info",
+        "https://api.atlassian.com/ex/jira/cloud-1/rest/api/3/myself",
+    ]
 
 
 async def test_jira_verify_rejects_bad_credentials(monkeypatch):
-    async def fake_get(self, url, **kwargs):
-        return httpx.Response(401, text="nope", request=httpx.Request("GET", url))
+    async def fake_request(self, method, url, **kwargs):
+        if url.endswith("/_edge/tenant_info"):
+            return httpx.Response(
+                200, json={"cloudId": "cloud-1"}, request=httpx.Request(method, url)
+            )
+        return httpx.Response(401, text="nope", request=httpx.Request(method, url))
 
-    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
 
     with pytest.raises(ServiceConnectError, match="did not accept"):
         await services.Jira.verify(
@@ -239,6 +251,14 @@ async def test_jira_verify_rejects_bad_credentials(monkeypatch):
                 base_url="https://jira.test", email="a@b.com", api_token="bad", webhook_secret="s"
             )
         )
+
+
+def test_jira_sends_a_service_account_login_as_a_bearer_token():
+    login = VaultSecret(
+        identity={"email": "svc-x1@serviceaccount.atlassian.com"}, secrets={"api_token": "jira-key"}
+    )
+
+    assert services.Jira.get_authorization(login) == "Bearer jira-key"
 
 
 async def test_tracker_check_accepts_trackerless_by_choice(monkeypatch):
@@ -571,12 +591,21 @@ async def test_jira_set_status_leaves_a_ticket_already_at_the_status_untouched()
 
 def test_jira_declares_known_exceptions():
     assert JiraAPIError in Jira.known_exceptions
+    assert TicketNotMovableError in Jira.known_exceptions
     assert UnknownTicketError in Jira.known_exceptions
     assert httpx.HTTPError in Jira.known_exceptions
 
 
 def _jira_client(handler) -> JiraClient:
-    wire = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    def gateway(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/_edge/tenant_info":
+            return httpx.Response(200, json={"cloudId": "cloud-1"})
+        assert request.url.host == "api.atlassian.com"
+        assert request.url.path.startswith("/ex/jira/cloud-1/")
+        request.url = request.url.copy_with(path=request.url.path.removeprefix("/ex/jira/cloud-1"))
+        return handler(request)
+
+    wire = httpx.AsyncClient(transport=httpx.MockTransport(gateway))
     return JiraClient(base_url="https://jira.test", email="a@b.com", api_token="tok", client=wire)
 
 
@@ -644,7 +673,7 @@ async def test_jira_client_still_errors_without_a_matching_transition():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"transitions": [{"id": "31", "to": {"name": "Done"}}]})
 
-    with pytest.raises(JiraAPIError, match="no transition to status"):
+    with pytest.raises(TicketNotMovableError, match="It can move to Done."):
         await _jira_client(handler).transition_issue("PROJ-7", "Ready for Agent")
 
 
