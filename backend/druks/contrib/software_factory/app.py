@@ -18,6 +18,7 @@ from druks.contrib.software_factory.contracts import (
 from druks.contrib.software_factory.ticketing.base import Tracker
 from druks.contrib.software_factory.ticketing.druks import DruksTracker
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
+from druks.contrib.software_factory.ticketing.github import GitHub
 from druks.contrib.software_factory.ticketing.jira import Jira
 from druks.contrib.software_factory.ticketing.linear import Linear
 from druks.core import services
@@ -37,7 +38,12 @@ async def check_tracker_identity() -> CheckResult:
         return CheckResult(name="tracker", ok=True, detail="trackerless by choice")
     if settings.tracker == "druks":
         return CheckResult(name="tracker", ok=True, detail="this appliance")
-    service = {"linear": services.Linear, "jira": services.Jira}[settings.tracker]
+    service = {
+        "linear": services.Linear,
+        "jira": services.Jira,
+        # The GitHub tracker acts as the operator App, so it needs no credential of its own.
+        "github": services.Github,
+    }[settings.tracker]
     if await service.is_connected():
         return CheckResult(name="tracker", ok=True, detail=f"{settings.tracker} connected")
     return CheckResult(
@@ -52,14 +58,13 @@ async def check_tracker_identity() -> CheckResult:
 async def list_tracker_status_choices() -> list[dict[str, str]]:
     """The statuses of the selected tracker. Empty when no connected tracker lists them."""
     tracker = await SoftwareFactory.get_tracker()
-    if not tracker:
-        return []
-    async with tracker:
-        try:
-            return await tracker.list_status_choices()
-        except tracker.known_exceptions:
-            logger.warning("Could not list the tracker statuses.", exc_info=True)
-            return []
+    if tracker:
+        async with tracker:
+            try:
+                return await tracker.list_status_choices()
+            except tracker.known_exceptions:
+                logger.warning("Could not list the tracker statuses.", exc_info=True)
+    return []
 
 
 async def check_review_identity() -> CheckResult:
@@ -86,7 +91,7 @@ class SoftwareFactory(App):
     )
 
     class Settings(AppSettings):
-        tracker: Literal["none", "linear", "jira", "druks"] = Field(
+        tracker: Literal["none", "linear", "jira", "druks", "github"] = Field(
             default="linear",
             title="Tracker",
             description="Which ticket tracker this installation uses.",
@@ -97,7 +102,7 @@ class SoftwareFactory(App):
             description="A ticket entering this status opens a build.",
             json_schema_extra={
                 "section": "Statuses",
-                "visible_when": {"tracker": ["linear", "jira"]},
+                "visible_when": {"tracker": ["linear", "jira", "github"]},
             },
         )
         in_progress_status: Annotated[str, Choices(list_tracker_status_choices)] = Field(
@@ -106,7 +111,7 @@ class SoftwareFactory(App):
             description="The status of a ticket while a build works on it.",
             json_schema_extra={
                 "section": "Statuses",
-                "visible_when": {"tracker": ["linear", "jira"]},
+                "visible_when": {"tracker": ["linear", "jira", "github"]},
             },
         )
         in_review_status: Annotated[str, Choices(list_tracker_status_choices)] = Field(
@@ -116,7 +121,7 @@ class SoftwareFactory(App):
             "Empty leaves the ticket where it is.",
             json_schema_extra={
                 "section": "Statuses",
-                "visible_when": {"tracker": ["linear", "jira"]},
+                "visible_when": {"tracker": ["linear", "jira", "github"]},
             },
         )
         done_status: Annotated[str, Choices(list_tracker_status_choices)] = Field(
@@ -125,7 +130,7 @@ class SoftwareFactory(App):
             description="The status of a ticket after its pull request merges.",
             json_schema_extra={
                 "section": "Statuses",
-                "visible_when": {"tracker": ["linear", "jira"]},
+                "visible_when": {"tracker": ["linear", "jira", "github"]},
             },
         )
         resting_status: Annotated[str, Choices(list_tracker_status_choices)] = Field(
@@ -135,7 +140,7 @@ class SoftwareFactory(App):
             "Empty leaves the ticket where it is.",
             json_schema_extra={
                 "section": "Statuses",
-                "visible_when": {"tracker": ["linear", "jira"]},
+                "visible_when": {"tracker": ["linear", "jira", "github"]},
             },
         )
 
@@ -169,6 +174,9 @@ class SoftwareFactory(App):
                     api_token=row.secrets["api_token"],
                     status_names=status_names,
                 )
+            if settings.tracker == "github":
+                client = await services.Github.get_client()
+                return GitHub(client=client, status_names=status_names)
         except ServiceNotConnectedError:
             return
 

@@ -5,7 +5,7 @@ from druks.contrib.software_factory.models import ProjectRepo, WorkItem
 from druks.contrib.software_factory.ticketing.enums import TicketStatus
 from druks.contrib.software_factory.workflows import Build, Profile
 from druks.models import Base
-from druks.signals import subscribe
+from druks.signals import publish, subscribe
 from druks.workflows import WorkflowEvent
 
 
@@ -76,6 +76,30 @@ async def pr_close_settles_the_item(*, repo: str, pr_number: int, payload: dict)
     if item and item.resolution in (None, Resolution.CANCELLED):
         resolution = Resolution.MERGED if payload["merged"] else Resolution.CLOSED
         await item.resolve(resolution, at=payload["resolved_at"])
+
+
+@subscribe("issue.labeled")
+async def issue_label_transitions_the_ticket(*, repo: str, number: int, payload: dict) -> None:
+    """GitHub has no status field, so a label is the status of a GitHub ticket."""
+    assignee_id = payload["assignee_id"]
+    await publish(
+        "ticket.transitioned",
+        payload={
+            "source": "github",
+            # Issue numbers repeat across repos, so the key carries the repo.
+            "identifier": f"{repo}#{number}",
+            "status": payload["label"],
+            "title": payload["title"],
+            "url": payload["url"],
+            # The issue's own repo is the build's repo, so no label routes it elsewhere.
+            "project_name": repo,
+            "labels": [],
+            "actor_id": str(payload["actor_id"]),
+            "assignee_id": str(assignee_id) if assignee_id else None,
+            "assignee_email": None,
+            "assignee_name": payload["assignee"],
+        },
+    )
 
 
 @subscribe("ticket.transitioned")

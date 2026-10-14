@@ -398,10 +398,10 @@ Webhook URL:
 Callback URL:
 `<endpoint>/api/oauth/callback`
 
-Subscribe to issue comment, pull request, pull request review, pull request
-review comment, and push events. Keep **Expire user authorization tokens** on:
-Druks refreshes a person's sign-in with the refresh token that comes with it,
-and refuses a sign-in that has none.
+Subscribe to issues, issue comment, pull request, pull request review, pull
+request review comment, and push events. Keep **Expire user authorization
+tokens** on: Druks refreshes a person's sign-in with the refresh token that
+comes with it, and refuses a sign-in that has none.
 
 | Repository permission | Access |
 | --- | --- |
@@ -488,15 +488,19 @@ Select the tracker in **Software Factory → Settings**. The default is Linear.
 and webhook secret. The Jira identity uses a base URL, email, API token, and
 webhook secret. For an Atlassian service account, the email is its address at
 `serviceaccount.atlassian.com`. Druks validates the credentials before it
-stores them. Linear and Jira share five status settings: trigger, in progress,
-in review, done, and resting. When the selected tracker is connected, the
-settings page lists its statuses. After you change the tracker, save the
-settings to list the statuses of the new tracker. An empty in review or resting
-status leaves the ticket where it is.
+stores them. Linear, Jira, and GitHub share five status settings: trigger, in
+progress, in review, done, and resting. When the selected tracker is connected
+and lists its statuses, the settings page offers them as choices. After you
+change the tracker, save the settings to list the statuses of the new tracker.
+An empty in review or resting status leaves the ticket where it is.
 
 Select **druks** to use the ticket board on this appliance. That choice needs no
 credentials. The status settings stay hidden. The trigger status is
 Ready for Agent, and it is not a setting.
+
+Select **GitHub** to take work from GitHub Issues in the repositories the
+operator GitHub App is already installed on. That choice needs no second
+credential. See [GitHub Issues as the tracker](#github-issues-as-the-tracker).
 
 The dashboard shows the board and the ticket pages only for **druks**. Each
 ticket selects a GitHub repository from a Software Factory project. Druks derives
@@ -528,19 +532,41 @@ Druks accepts the REST issue JSON under `issue`. Put the shared token in the
 `x-druks-webhook-token` header. Put `{{initiator.accountId}}` in the
 `x-jira-initiator` header, so Druks knows who moved the ticket. See
 [Jira's user smart values](https://support.atlassian.com/cloud-automation/docs/jira-smart-values-users/).
-`druks doctor` treats a disconnected Linear or Jira identity as optional when
-that tracker is not selected. It reports pending setup if the selected tracker
-is Linear or Jira and that identity is missing.
+`druks doctor` treats a disconnected tracker identity as optional when that
+tracker is not selected. It reports pending setup if the selected tracker is
+Linear, Jira, or GitHub and its identity is missing.
 
-Software Factory starts a Linear or Jira build under the Druks account of the
-person who moved the ticket. If that person has no account, the build uses the
-account of the ticket assignee, and then the default account. Linear sends that
-person in its webhook. Jira sends that person in the `x-jira-initiator` header.
-A person has an account when their tracker ID matches the
+Software Factory starts a Linear, Jira, or GitHub build under the Druks account
+of the person who moved the ticket. If that person has no account, the build
+uses the account of the ticket assignee, and then the default account. Linear
+sends that person in its webhook. Jira sends that person in the
+`x-jira-initiator` header. GitHub sends the person who added the label. A Linear
+or Jira person has an account when their tracker ID matches the
 [provider account](#oauth-grant-identity) of an MCP connection that they made
 with **Connect your account**. A connection for everyone has no account, so it
-does not match. Two matching accounts also do not match. A **druks** ticket
-build uses the account of the ticket assignee.
+does not match. A GitHub person has the account that their
+[GitHub sign-in](#github) links. Two matching accounts do not match. A **druks**
+ticket build uses the account of the ticket assignee.
+
+### GitHub Issues as the tracker
+
+GitHub has no status field, so the GitHub tracker reads the five status settings
+as **label names**. An issue that gets the trigger label opens a build. The label
+arrives through the operator App's webhook, so the App must subscribe to the
+**issues** event. An App made with **Create App** subscribes to it. Add the event
+to an older App or to an App that you registered by hand.
+
+The status settings default to Linear status names, so name them for GitHub, for
+example `ready-for-agent` and `agent:in-progress`. The settings page lists no
+labels, so you type them. GitHub creates a missing label with a default colour
+the first time Druks sets it. The labels act as one status: setting one removes
+the others, the trigger label too. The done label also closes the issue.
+
+A label from a person opens a build, and so does a label that Druks sets through
+the agent `start` route. A label from another App does nothing. The issue's
+repository must be in a Software Factory project, and the build opens its pull
+request there. A ticket key is `owner/repo#number`, because issue numbers repeat
+across repositories. In a URL path, encode its `#` as `%23`.
 
 ## WhatsApp
 

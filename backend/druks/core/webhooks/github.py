@@ -109,6 +109,29 @@ class GitHubEvents(Webhook):
                 },
             )
 
+    async def on_issues_labeled(self) -> Response:
+        """Publish a label that a person or this App put on an issue. Another App's
+        label acts for no one here."""
+        sender, issue = self.data["sender"], self.data["issue"]
+        # GitHub names an App's bot user after the App's slug.
+        own_bot = f"{(await Github.get()).identity['slug']}[bot]"
+        if sender["type"] == "User" or sender["login"] == own_bot:
+            assignee = issue.get("assignee") or {}
+            await publish(
+                "issue.labeled",
+                repo=_repo_name(self.data),
+                number=issue["number"],
+                payload={
+                    "label": self.data["label"]["name"],
+                    "actor_id": sender["id"],
+                    "title": issue["title"],
+                    "url": issue["html_url"],
+                    "assignee": assignee.get("login"),
+                    "assignee_id": assignee.get("id"),
+                },
+            )
+        return _accepted()
+
     async def on_pull_request_closed(self) -> Response:
         pull_request = self.data["pull_request"]
         merged = pull_request["merged"]
