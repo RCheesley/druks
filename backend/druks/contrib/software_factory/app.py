@@ -38,11 +38,12 @@ async def check_tracker_identity() -> CheckResult:
         return CheckResult(name="tracker", ok=True, detail="trackerless by choice")
     if settings.tracker == "druks":
         return CheckResult(name="tracker", ok=True, detail="this appliance")
-    # The operator App is the GitHub tracker's identity; there is no second
-    # credential to connect.
-    service = {"linear": services.Linear, "jira": services.Jira, "github": services.Github}[
-        settings.tracker
-    ]
+    service = {
+        "linear": services.Linear,
+        "jira": services.Jira,
+        # The GitHub tracker acts as the operator App, so it needs no credential of its own.
+        "github": services.Github,
+    }[settings.tracker]
     if await service.is_connected():
         return CheckResult(name="tracker", ok=True, detail=f"{settings.tracker} connected")
     return CheckResult(
@@ -57,14 +58,13 @@ async def check_tracker_identity() -> CheckResult:
 async def list_tracker_status_choices() -> list[dict[str, str]]:
     """The statuses of the selected tracker. Empty when no connected tracker lists them."""
     tracker = await SoftwareFactory.get_tracker()
-    if not tracker:
-        return []
-    async with tracker:
-        try:
-            return await tracker.list_status_choices()
-        except tracker.known_exceptions:
-            logger.warning("Could not list the tracker statuses.", exc_info=True)
-            return []
+    if tracker:
+        async with tracker:
+            try:
+                return await tracker.list_status_choices()
+            except tracker.known_exceptions:
+                logger.warning("Could not list the tracker statuses.", exc_info=True)
+    return []
 
 
 async def check_review_identity() -> CheckResult:
@@ -175,10 +175,8 @@ class SoftwareFactory(App):
                     status_names=status_names,
                 )
             if settings.tracker == "github":
-                # Presence check only: the client resolves App credentials per
-                # repository installation, not from this row.
-                await services.Github.get()
-                return GitHub(status_names=status_names)
+                client = await services.Github.get_client()
+                return GitHub(client=client, status_names=status_names)
         except ServiceNotConnectedError:
             return
 

@@ -377,46 +377,27 @@ class GitHubClient:
 
     @_retry_on_401
     async def replace_issue_labels(
-        self,
-        repo: str,
-        issue_number: int,
-        *,
-        add: str,
-        remove: set[str],
+        self, repo: str, issue_number: int, *, add: str, remove: set[str]
     ) -> None:
-        """Add one label and drop a set of others, for callers that treat a group
-        of labels as mutually exclusive.
-
-        Removal is per-label and tolerates a 404: GitHub returns one when the
-        label isn't on the issue, which is the normal case and not a failure.
-        """
+        """Put ``add`` on the issue and take ``remove`` off. GitHub answers 404 for a
+        label the issue does not carry, and that label is already off."""
         owner, name = repo.split("/", 1)
         github = await self._for_repo(repo)
         await github.rest.issues.async_add_labels(owner, name, issue_number, data=[add])
         for label in remove:
             try:
                 await github.rest.issues.async_remove_label(owner, name, issue_number, label)
-            except RequestFailed as exc:
-                if exc.response.status_code != 404:
+            except RequestFailed as error:
+                if error.response.status_code != 404:
                     raise
 
     @_retry_on_401
-    async def set_issue_state(
-        self,
-        repo: str,
-        issue_number: int,
-        *,
-        state: str,
-        state_reason: str | None = None,
-    ) -> None:
-        """Open or close an issue. ``state_reason`` distinguishes a completed
-        close from a not-planned one, which GitHub renders differently."""
+    async def close_issue(self, repo: str, issue_number: int) -> None:
         owner, name = repo.split("/", 1)
         github = await self._for_repo(repo)
-        payload: dict[str, Any] = {"state": state}
-        if state_reason:
-            payload["state_reason"] = state_reason
-        await github.rest.issues.async_update(owner, name, issue_number, **payload)
+        await github.rest.issues.async_update(
+            owner, name, issue_number, state="closed", state_reason="completed"
+        )
 
     @_retry_on_401
     async def get_pull_request(self, repo: str, pr_number: int) -> dict[str, Any]:

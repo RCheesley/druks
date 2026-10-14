@@ -80,24 +80,22 @@ async def pr_close_settles_the_item(*, repo: str, pr_number: int, payload: dict)
 
 @subscribe("issue.labeled")
 async def issue_label_transitions_the_ticket(*, repo: str, number: int, payload: dict) -> None:
-    """GitHub has no status field, so the GitHub tracker reads a label as one. Issue
-    numbers repeat across repos, so the key carries the repo. The issue's own repo is
-    the build's repo: the full name routes to exactly it, and no label routes it
-    anywhere else."""
+    """GitHub has no status field, so a label is the status of a GitHub ticket."""
+    assignee_id = payload["assignee_id"]
     await publish(
         "ticket.transitioned",
         payload={
             "source": "github",
+            # Issue numbers repeat across repos, so the key carries the repo.
             "identifier": f"{repo}#{number}",
             "status": payload["label"],
             "title": payload["title"],
             "url": payload["url"],
+            # The issue's own repo is the build's repo, so no label routes it elsewhere.
             "project_name": repo,
             "labels": [],
-            # A login is not an address, and no grant issuer vouches for it, so it
-            # selects no account. The name is for display only.
-            "actor_id": None,
-            "assignee_id": None,
+            "actor_id": str(payload["actor_id"]),
+            "assignee_id": str(assignee_id) if assignee_id else None,
             "assignee_email": None,
             "assignee_name": payload["assignee"],
         },

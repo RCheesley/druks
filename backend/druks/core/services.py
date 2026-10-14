@@ -57,7 +57,6 @@ class Github(Service):
         "public": False,
         "default_events": [
             "issue_comment",
-            # Issue labelling is the GitHub tracker's intake signal.
             "issues",
             "pull_request",
             "pull_request_review",

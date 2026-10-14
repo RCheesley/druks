@@ -9,9 +9,9 @@ from druks.core.webhooks.github import GitHubEvents
 from druks.testing import make_settings
 
 
-def _events(tmp_path, *, payload, event="issues"):
+def _events(tmp_path, *, payload):
     events = GitHubEvents(
-        request=cast(Any, SimpleNamespace(headers={"x-github-event": event})),
+        request=cast(Any, SimpleNamespace(headers={"x-github-event": "issues"})),
         kwargs={},
         settings=make_settings(tmp_path),
     )
@@ -19,36 +19,28 @@ def _events(tmp_path, *, payload, event="issues"):
     return events
 
 
-def _labeled(
-    *,
-    number=7,
-    label="ready-for-agent",
-    assignee=None,
-    sender_type="User",
-    sender_login="octocat",
-):
+def _labeled(*, assignee=None, sender_type="User", sender_login="octocat"):
     return {
         "action": "labeled",
-        "label": {"name": label},
+        "label": {"name": "ready-for-agent"},
         "issue": {
-            "number": number,
+            "number": 7,
             "title": "Contacts import drops the last row",
-            "html_url": f"https://github.com/acme/widget/issues/{number}",
-            "labels": [{"name": label}],
+            "html_url": "https://github.com/acme/widget/issues/7",
             "assignee": assignee,
         },
-        "repository": {"full_name": "acme/widget", "name": "widget"},
-        "sender": {"type": sender_type, "login": sender_login},
+        "repository": {"full_name": "acme/widget"},
+        "sender": {"type": sender_type, "login": sender_login, "id": 583231},
     }
 
 
-def _capture(monkeypatch, module=github_webhooks):
+def _capture(monkeypatch):
     published = []
 
     async def _emit(event_type, **kwargs):
         published.append((event_type, kwargs))
 
-    monkeypatch.setattr(module, "publish", _emit)
+    monkeypatch.setattr(github_webhooks, "publish", _emit)
     return published
 
 
@@ -60,19 +52,13 @@ async def _connect_github():
     )
 
 
-def test_a_labelled_issue_dispatches_to_the_issues_handler(tmp_path):
-    # get_action composes event + action, so `issues` + `labeled` has to land on
-    # on_issues_labeled for any of this to run.
-    assert _events(tmp_path, payload=_labeled()).get_action() == "issues_labeled"
-
-
-async def test_a_persons_label_publishes_a_neutral_fact(tmp_path, monkeypatch):
+async def test_a_persons_label_publishes_the_label_and_who_put_it(druks_db, tmp_path, monkeypatch):
+    await _connect_github()
     published = _capture(monkeypatch)
 
-    payload = _labeled(assignee={"login": "hubot"})
+    payload = _labeled(assignee={"login": "hubot", "id": 480938})
     await _events(tmp_path, payload=payload).on_issues_labeled()
 
-    # Core knows nothing about work items: the fact is the label, not a transition.
     assert published == [
         (
             "issue.labeled",
@@ -81,9 +67,11 @@ async def test_a_persons_label_publishes_a_neutral_fact(tmp_path, monkeypatch):
                 "number": 7,
                 "payload": {
                     "label": "ready-for-agent",
+                    "actor_id": 583231,
                     "title": "Contacts import drops the last row",
                     "url": "https://github.com/acme/widget/issues/7",
                     "assignee": "hubot",
+                    "assignee_id": 480938,
                 },
             },
         )
@@ -101,8 +89,7 @@ async def test_another_apps_label_publishes_nothing(druks_db, tmp_path, monkeypa
 
 
 async def test_the_apps_own_label_publishes(druks_db, tmp_path, monkeypatch):
-    # The start route asks for a build by setting the trigger label through the
-    # App, so the App's own label has to reach the funnel.
+    # The start route asks for a build by setting the trigger label through the App.
     await _connect_github()
     published = _capture(monkeypatch)
 
@@ -112,47 +99,7 @@ async def test_the_apps_own_label_publishes(druks_db, tmp_path, monkeypatch):
     assert [event for event, _ in published] == ["issue.labeled"]
 
 
-async def test_a_label_becomes_a_ticket_transition(monkeypatch):
-    published = _capture(monkeypatch, module=subs)
-
-    await subs.issue_label_transitions_the_ticket(
-        repo="acme/widget",
-        number=42,
-        payload={
-            "label": "ready-for-agent",
-            "title": "Contacts import drops the last row",
-            "url": "https://github.com/acme/widget/issues/42",
-            "assignee": "octocat",
-        },
-    )
-
-    assert published == [
-        (
-            "ticket.transitioned",
-            {
-                "payload": {
-                    "source": "github",
-                    # Issue numbers are only unique within a repo, so the key says which.
-                    "identifier": "acme/widget#42",
-                    "status": "ready-for-agent",
-                    "title": "Contacts import drops the last row",
-                    "url": "https://github.com/acme/widget/issues/42",
-                    # The full name matches one repo exactly. A label such as
-                    # ``api`` would match any owner's ``api``, so none routes it.
-                    "project_name": "acme/widget",
-                    "labels": [],
-                    # A login is not an address and selects no account.
-                    "actor_id": None,
-                    "assignee_id": None,
-                    "assignee_email": None,
-                    "assignee_name": "octocat",
-                },
-            },
-        )
-    ]
-
-
-async def test_the_trigger_label_dispatches_a_github_build(monkeypatch):
+async def test_the_trigger_label_dispatches_a_build_for_the_issue(monkeypatch):
     settings = subs.SoftwareFactory.Settings(tracker="github", trigger_status="ready-for-agent")
 
     async def _settings(cls):
@@ -167,11 +114,26 @@ async def test_the_trigger_label_dispatches_a_github_build(monkeypatch):
         number=7,
         payload={
             "label": "ready-for-agent",
+            "actor_id": 583231,
             "title": "Contacts import drops the last row",
             "url": "https://github.com/acme/widget/issues/7",
             "assignee": None,
+            "assignee_id": None,
         },
     )
 
-    build.assert_awaited_once()
-    assert build.await_args.kwargs["ticket"]["identifier"] == "acme/widget#7"
+    build.assert_awaited_once_with(
+        ticket={
+            "source": "github",
+            "identifier": "acme/widget#7",
+            "status": "ready-for-agent",
+            "title": "Contacts import drops the last row",
+            "url": "https://github.com/acme/widget/issues/7",
+            "project_name": "acme/widget",
+            "labels": [],
+            "actor_id": "583231",
+            "assignee_id": None,
+            "assignee_email": None,
+            "assignee_name": None,
+        }
+    )

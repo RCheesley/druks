@@ -274,8 +274,7 @@ async def list_work_items_history(
 
 
 @work_items_router.post(
-    # ``path`` lets a GitHub key, ``owner/repo#12``, through: its ``/`` would end a
-    # plain segment. The caller encodes the ``#`` as ``%23``.
+    # A GitHub key, ``owner/repo#12``, has a ``/`` that would end a plain segment.
     "/{ticket:path}/start",
     status_code=status.HTTP_202_ACCEPTED,
     operation_id="start",

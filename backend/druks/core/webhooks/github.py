@@ -110,11 +110,12 @@ class GitHubEvents(Webhook):
             )
 
     async def on_issues_labeled(self) -> Response:
-        """Publish a label a person put on an issue. The App's own labels publish
-        too: setting a label through the API is how Druks itself asks for one. Any
-        other app is not acting for anyone here."""
+        """Publish a label that a person or this App put on an issue. Another App's
+        label acts for no one here."""
         sender, issue = self.data["sender"], self.data["issue"]
-        if sender["type"] == "User" or await _is_own_app(sender):
+        # GitHub names an App's bot user after the App's slug.
+        own_bot = f"{(await Github.get()).identity['slug']}[bot]"
+        if sender["type"] == "User" or sender["login"] == own_bot:
             assignee = issue.get("assignee") or {}
             await publish(
                 "issue.labeled",
@@ -122,9 +123,11 @@ class GitHubEvents(Webhook):
                 number=issue["number"],
                 payload={
                     "label": self.data["label"]["name"],
+                    "actor_id": sender["id"],
                     "title": issue["title"],
                     "url": issue["html_url"],
                     "assignee": assignee.get("login"),
+                    "assignee_id": assignee.get("id"),
                 },
             )
         return _accepted()
@@ -173,11 +176,3 @@ def _accepted() -> Response:
 
 def _repo_name(payload: dict[str, Any]) -> str:
     return payload["repository"]["full_name"]
-
-
-async def _is_own_app(sender: dict[str, Any]) -> bool:
-    if sender["type"] != "Bot":
-        return False
-    # GitHub names an App's bot user after the App's slug.
-    slug = (await Github.get()).identity["slug"]
-    return sender["login"] == f"{slug}[bot]"
