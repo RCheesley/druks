@@ -5,7 +5,7 @@ sidebarTitle: "Colima on macOS"
 icon: "apple"
 ---
 
-[Full local setup](full-local.md) assumes Docker Desktop on macOS. Colima is a valid, open source alternative to Docker Desktop. Colima runs the Docker daemon in a Linux VM. The Compose services use `network_mode: host`, so "the host" is that VM, not your Mac. Colima forwards the ports that the VM listens on to your Mac.
+[Full local setup](/full-local) on macOS needs a Docker host. [Docker Desktop](/container-runtimes/docker-desktop) is one option. Colima is a valid, open source alternative to Docker Desktop. Colima runs the Docker daemon in a Linux VM. The Compose services use `network_mode: host`, so "the host" is that VM, not your Mac. Colima forwards the ports that the VM listens on to your Mac.
 
 Three installer defaults assume Docker Desktop. On Colima they behave as follows:
 
@@ -56,7 +56,7 @@ Use the number that `stat` printed.
 
 ## 3. Install and verify
 
-Run the installer and the steps in [full local setup](full-local.md) with `DOCKER_CONTEXT` set. Then prove the sandbox path:
+Run the installer and the steps in [full local setup](/full-local) with `DOCKER_CONTEXT` set. Then prove the sandbox path:
 
 ```bash
 docker compose exec web druks doctor --sandbox
