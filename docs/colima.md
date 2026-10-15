@@ -5,8 +5,7 @@ sidebarTitle: "Colima on macOS"
 icon: "apple"
 ---
 
-[Full local setup](full-local.md) assumes Docker Desktop on macOS. Colima is a valid, open source alternative to Docker Desktop. Colima runs the Docker daemon in a Linux VM. The Compose
-services use `network_mode: host`, so "the host" is that VM, not your Mac. Colima forwards the ports that the VM listens on to your Mac.
+[Full local setup](full-local.md) assumes Docker Desktop on macOS. Colima is a valid, open source alternative to Docker Desktop. Colima runs the Docker daemon in a Linux VM. The Compose services use `network_mode: host`, so "the host" is that VM, not your Mac. Colima forwards the ports that the VM listens on to your Mac.
 
 Three installer defaults assume Docker Desktop. On Colima they behave as follows:
 
@@ -31,9 +30,7 @@ colima start druks --cpu 4 --memory 8 --disk 60 \
 export DOCKER_CONTEXT=colima-druks
 ```
 
-`--activate=false` keeps your current Docker context. Set `DOCKER_CONTEXT` in each shell that runs the installer or `docker compose` for this installation.
-
-Omit the flag to make this VM the default context.
+`--activate=false` keeps your current Docker context. Set `DOCKER_CONTEXT` in each shell that runs the installer or `docker compose` for this installation. Omit the flag to make this VM the default context.
 
 Colima mounts your home directory into the VM with write access. Thus, the installer's default paths under `~` work without extra mounts.
 
@@ -73,7 +70,7 @@ Colima's default `bridge` gateway is `172.17.0.1`. Thus, the default `[sandbox].
 
 Colima forwards each port that the VM listens on to the Mac. The installer binds the dashboard to `0.0.0.0` on macOS, and Colima then listens on `*:8001` on the Mac. The local instance has no browser authentication. Thus, any device that reaches your Mac on your network can open the dashboard. Do not run a local installation on an untrusted network.
 
-Two running Colima VMs that both listen on `8001` compete for the same Mac port, and the first one to bind wins. Nothing reports the conflict. Stop one VM, or run the other installation on another dashboard port. 
+Two running Colima VMs that both listen on `8001` compete for the same Mac port, and the first one to bind wins. Nothing reports the conflict. Stop one VM, or run the other installation on another dashboard port.
 
 To move the dashboard, change `DRUKS_WEB_PORT`, `DRUKS_UPSTREAM`, `[urls].endpoint`, and `[sandbox].issuer_url` together.
 
