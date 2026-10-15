@@ -117,7 +117,7 @@ curl -fsS http://127.0.0.1:8001/health
 ```
 
 Build the sandbox images. Do this after every deploy, as
-[Update / redeploy](#update--redeploy) describes:
+[Update and redeploy](#update-and-redeploy) describes:
 
 ```bash
 docker compose exec web druks sandboxes build
@@ -312,7 +312,7 @@ that port. The listener is plain HTTP. Give it an address that only the
 tailnet or a private network reaches. Leave `[sandbox].issuer_url` empty for a
 local Drukbox: the exchange reaches web on loopback.
 
-## Update / redeploy
+## Update and redeploy
 
 Edit `druks.toml`. Then run the installer from the version that you will deploy.
 The installer creates `.env` and refreshes `compose.yaml` and the Caddyfile. It
