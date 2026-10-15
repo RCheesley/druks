@@ -22,7 +22,7 @@ Three installer defaults assume Docker Desktop. On Colima they behave as follows
 
 ## 1. Start a VM for Druks
 
-If you might be using more than one local instance of Druks, give each installation its own Colima profile. Two local-shape stacks cannot share one Docker daemon, because Drukbox, the secrets exchange, and the secrets proxy use fixed host-network ports.
+If you might be using more than one local instance of Druks, give each installation its own Colima profile. Two local installations cannot share one Docker daemon, because Drukbox, the secrets exchange, and the secrets proxy use fixed host-network ports.
 
 ```bash
 colima start druks --cpu 4 --memory 8 --disk 60 \

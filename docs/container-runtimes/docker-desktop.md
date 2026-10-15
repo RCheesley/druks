@@ -1,6 +1,6 @@
 ---
 title: "Docker Desktop on macOS"
-description: "Enable host networking in Docker Desktop before you install the local Druks shape."
+description: "Enable host networking in Docker Desktop before you install Druks locally."
 sidebarTitle: "Docker Desktop on macOS"
 icon: "container"
 ---
