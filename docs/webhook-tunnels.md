@@ -17,7 +17,7 @@ Forward only these path prefixes to `http://127.0.0.1:8001`:
 | `/_external/` | Provider webhooks. Druks verifies the signature of each delivery |
 | `/mcp` | Druks' own MCP server. Sandboxes call it at `https://<webhook_host>/mcp` with a bearer token |
 
-Do not forward `/`. The local shape has no browser authentication, so a public dashboard is open to anyone.
+Do not forward `/`. A local installation has no browser authentication, so a public dashboard is open to anyone.
 
 `/mcp` is required. When `urls.webhook_host` is set, Druks gives each sandbox `https://<webhook_host>/mcp` as the address of the Druks MCP server. Chat, phone calls, and the Software Factory ticket tools use this address. A tunnel that forwards only `/_external/` breaks them.
 
