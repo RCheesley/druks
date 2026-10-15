@@ -89,7 +89,7 @@ lsof -nP -iTCP:443 -sTCP:LISTEN
 
 A local web server, or a Docker or VM runtime that publishes `443` on every interface, takes the connection before Funnel does. The symptoms point at Tailscale instead: TLS fails with `tlsv1 alert internal error`, and the public DNS record does not appear. Use `8443` in that case.
 
-Forward the two path prefixes:
+Forward the two path prefixes using the port appropriate to your setup (here 8443 is used):
 
 ```bash
 tailscale funnel --bg --https=8443 --set-path /_external/ http://127.0.0.1:8001/_external/
