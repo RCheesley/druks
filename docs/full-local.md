@@ -45,6 +45,9 @@ Before you run the installer:
 See [Docker's host networking guide](https://docs.docker.com/engine/network/drivers/host/#docker-desktop)
 for the platform requirements and limitations.
 
+To use Colima instead of Docker Desktop, see
+[Colima on macOS](colima.md).
+
 ## 1. Install the local Druks profile
 
 ```bash

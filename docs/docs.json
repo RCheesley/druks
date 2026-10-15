@@ -43,7 +43,8 @@
         "pages": [
           "index",
           "quickstart",
-          "full-local"
+          "full-local",
+          "colima"
         ]
       },
       {
