@@ -530,7 +530,7 @@ Codex. A nested CLI reads it from the environment. The
 [configuration guide](configuration.md#harnesses) lists the variable, host, and
 header per harness.
 
-### Give an agent a service's secret
+### Give an agent a service secret
 
 An agent that calls a provider from its sandbox lists the secret it needs. The
 [service](#declare-a-service) declares the one host that its secrets can go to:
@@ -780,7 +780,7 @@ the secrets before the sandbox exists, so read them from the subject alone.
 
 A vault row with one secret issues it under any name. For the secret of a
 service that does not depend on the subject,
-[list it on the agent](#give-an-agent-a-services-secret) instead.
+[list it on the agent](#give-an-agent-a-service-secret) instead.
 
 Override `get_mcp_servers(subject)` to give the sandbox an MCP server with its
 own vault row:
