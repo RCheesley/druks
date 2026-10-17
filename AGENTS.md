@@ -76,6 +76,10 @@ For app-surface changes, inspect the proof app at
 - Put only identity and facts in a read-side field. Keep UI wording in the app pages.
 - Give a shared resource one global registry. When a second
   consumer needs a different answer, add a scoping axis. Do not add one in anticipation.
+- Druks UI shows data and acts on an app's own records. Do not rebuild the
+  screens or the settings of a connected service in app pages or app settings.
+  The app's Bot changes the service through its API. See "What pages are for"
+  in `docs/writing-an-app.md`.
 
 ## Layout
 

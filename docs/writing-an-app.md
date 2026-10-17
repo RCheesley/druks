@@ -1861,6 +1861,26 @@ name, a nested child, two routes a request could not tell apart, a signature
 that does not match its route, or a navigation entry that is not a static
 top-level page fails the load, with the app name and the exact cause.
 
+### What pages are for
+
+Pages show data and act on the app's own records. A page or an app setting
+does not rebuild the screens or the settings of a service that the app
+connects to. The service's own interface does this better.
+
+To change how a connected service is set up, a person asks Druks in chat. The
+app's [Bot](#answer-whatsapp-with-a-bot) makes the change through the
+service's API. Its tools are the app's routes tagged `bot`.
+
+These belong in Druks:
+
+- The service's card, with its URL and credentials.
+- An action on the app's own record, for example a retry of one delivery.
+
+This does not belong in Druks:
+
+- A page or an app setting that edits the service's configuration, for
+  example its taxes, users, or templates.
+
 ### A page function is a pure read
 
 Druks reruns a page function on initial load, on an event, on reconnect, on a
