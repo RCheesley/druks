@@ -29,11 +29,9 @@ You need no Tailscale account or remote VM provider.
 The image registry provides Druks service and sandbox images for both
 `linux/amd64` and `linux/arm64`.
 
-### macOS: set up a Docker host first
+### macOS: set up
 
-The Compose services use `network_mode: host`. On macOS, Docker runs inside a
-Linux VM, so that VM needs host networking and its ports forwarded to your Mac.
-Set one of these up before you run the installer:
+Set up one of these before you run the installer:
 
 - [Docker Desktop](container-runtimes/docker-desktop.md)
 - [Colima](container-runtimes/colima.md)
