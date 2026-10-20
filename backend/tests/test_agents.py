@@ -4,20 +4,24 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import installation_key, make_agent_result
+from conftest import connect_service, installation_key, make_agent_result
 from druks import agents
 from druks.accounts.models import Account
+from druks.browser import BrowserClient, BrowserSession
 from druks.db import db_session
 from druks.durable import AgentCall, WorkflowError
 from druks.files import File
+from druks.sandbox.datastructures import McpServer
 from druks.sandbox.exceptions import SandboxDownloadError
 from druks.sandbox.models import SandboxIdentity, SecretRef
 from druks.secrets.datastructures import Audience
 from druks.secrets.enums import SecretKind
 from druks.secrets.models import VaultSecret
+from druks.services import Resource, Service
 from druks.usage.models import UsageScrape
 from druks.user_settings.models import SettingsOverride
 from druks.workspaces import Workspace
+from pydantic import BaseModel, SecretStr
 from sqlalchemy import select
 
 
@@ -40,6 +44,17 @@ FILE_AGENT = agents.Agent(
     id="file",
     prompt="dummy/agent.md",
     contract=FileOutput,
+)
+
+# Declared outside an app class, so the session joins no registry.
+ATLAS = BrowserSession(site="atlas.example", read_only=True)
+
+BROWSER_AGENT = agents.Agent(
+    id="browser_probe",
+    prompt="dummy/agent.md",
+    contract=DummyOutput,
+    browser=ATLAS,
+    browser_client=BrowserClient.PINCHTAB,
 )
 
 
@@ -125,6 +140,80 @@ def _inline_agent_steps(monkeypatch):
     monkeypatch.setattr(agents.DBOS, "run_step_async", run_inline)
     monkeypatch.setattr(agents.DBOS, "sleep_async", sleep)
     return checkpoints, sleep
+
+
+BROWSER_SERVER = McpServer(
+    name="browser", url="https://druks.example/mcp", bearer_token_env_var="MCP_BROWSER_TOKEN"
+)
+
+
+@pytest.fixture
+async def lent_browser(druks_db, monkeypatch):
+    """The browsers the calls borrow, each lent with one stored key."""
+    key = await VaultSecret.store(
+        druks_db, SecretKind.STATIC, "mcp:browser test", secrets={"value": "Bearer key"}
+    )
+    lent = []
+
+    @asynccontextmanager
+    async def lend(session, client, *, account_id, call_id):
+        lent.append((session, client, account_id, call_id))
+        yield BROWSER_SERVER, SecretRef(name="mcp_browser_token", secret_id=key.id)
+
+    monkeypatch.setattr(agents.AgentBrowser, "lend", lend)
+    return lent
+
+
+def test_a_browser_agent_drives_with_the_pinchtab_client():
+    with pytest.raises(TypeError, match="needs browser_client=BrowserClient.PINCHTAB"):
+        agents.Agent(id="no_client", contract=DummyOutput, browser=ATLAS)
+    with pytest.raises(TypeError, match="needs browser_client=BrowserClient.PINCHTAB"):
+        agents.Agent(
+            id="playwright_client",
+            contract=DummyOutput,
+            browser=ATLAS,
+            browser_client=BrowserClient.PLAYWRIGHT,
+        )
+    with pytest.raises(TypeError, match="needs browser="):
+        agents.Agent(id="no_session", contract=DummyOutput, browser_client=BrowserClient.PINCHTAB)
+
+
+async def test_an_agent_browser_gets_its_own_box_and_the_browser_server(
+    druks_db, tmp_path, monkeypatch, current_run, lent_browser
+):
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    boxes = []
+
+    @asynccontextmanager
+    async def fake_ephemeral(self, *, idempotency_key=None, secrets=None, **_kwargs):
+        boxes.append((idempotency_key, secrets))
+        yield sandbox
+
+    monkeypatch.setattr("druks.sandbox.client.Client.ephemeral", fake_ephemeral)
+    monkeypatch.setattr(current_run, "_lease_host", AsyncMock(side_effect=AssertionError))
+    other = McpServer(name="tracker", url="https://tracker.example/mcp")
+    resolve = AsyncMock(return_value=((other,), []))
+    monkeypatch.setattr(Workspace, "get_all_mcp_servers", resolve)
+
+    assert await BROWSER_AGENT._run(db_session(), workflow_id="wf-9") == DummyOutput(ok=True)
+
+    [(session, client, account_id, call_id)] = lent_browser
+    assert (session, client, account_id) == (ATLAS, BrowserClient.PINCHTAB, current_run.account_id)
+    [(key, secrets)] = boxes
+    assert key.startswith(f"wf-9:{call_id}:")
+    assert "mcp_browser_token" in secrets
+    kwargs = sandbox.run_agent.await_args.kwargs
+    assert kwargs["mcp_servers"] == (other, BROWSER_SERVER)
+
+
+async def test_a_replayed_call_starts_no_browser(monkeypatch, current_run, lent_browser):
+    async def replay(options, function):
+        return DummyOutput(ok=True)
+
+    monkeypatch.setattr(agents.DBOS, "run_step_async", replay)
+
+    assert await BROWSER_AGENT() == DummyOutput(ok=True)
+    assert lent_browser == []
 
 
 async def test_run_outside_workflow_raises():
@@ -220,10 +309,6 @@ async def test_an_agent_without_mcp_resolves_no_server(
 async def test_an_agent_holds_its_declared_service_secrets(
     druks_db, tmp_path, monkeypatch, current_run, declared_services
 ):
-    from conftest import connect_service
-    from druks.services import Service
-    from pydantic import BaseModel, SecretStr
-
     class Acme(Service):
         host = "api.acme.test"
 
@@ -259,6 +344,40 @@ async def test_an_agent_holds_its_declared_service_secrets(
     [ref] = list(refs)
     assert (ref.name, ref.secret_id, ref.host) == ("acme_api_key", card.id, "api.acme.test")
     assert await ref.secret.issue_token(ref.resource, name=ref.name) == ("key-1", None)
+
+
+async def test_an_agent_holds_a_resource_secret_from_its_workspace(
+    druks_db, tmp_path, monkeypatch, current_run, declared_services
+):
+    class Acme(Service):
+        host = "api.acme.test"
+
+        class Settings(BaseModel):
+            api_token: SecretStr
+
+        class Workers(Resource):
+            async def get_token(self) -> tuple[str, None]:
+                return f"{self.name}-token", None
+
+    async def get_secrets(cls, subject):
+        return await Acme.Workers("site").get_secrets()
+
+    card = await connect_service("acme", identity={}, secrets={"api_token": "pasted"})
+    monkeypatch.setattr(Workspace, "get_secrets", classmethod(get_secrets))
+    agent = agents.Agent(id="resource_probe", prompt="dummy/agent.md", contract=DummyOutput)
+    sandbox = _patch_runtime(monkeypatch, tmp_path, {"ok": True})
+    _patch_ephemeral(monkeypatch, sandbox)
+
+    await agent._run(db_session(), workflow_id="wf-9")
+
+    [identity] = await _identities("wf-9")
+    [ref] = await db_session().scalars(
+        select(SecretRef).where(
+            SecretRef.identity_id == identity.id, SecretRef.name == "acme_api_token"
+        )
+    )
+    assert (ref.secret_id, ref.resource, ref.host) == (card.id, "workers/site", "api.acme.test")
+    assert await ref.secret.issue_token(ref.resource, name=ref.name) == ("site-token", None)
 
 
 async def test_runner_comes_from_workflow_workspace_factory(

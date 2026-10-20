@@ -230,6 +230,7 @@ async def test_merge_when_ready_reports_unsettled_merge() -> None:
 class _OwnerReposClient(GitHubClient):
     def __init__(self, apps: Any) -> None:
         self._app_id = "123"
+        self._slug = "example-app"
         apps.async_create_installation_access_token = AsyncMock(
             return_value=SimpleNamespace(
                 parsed_data=SimpleNamespace(token="ghs_minted", expires_at="2026-09-07T18:00:00Z")
@@ -538,13 +539,14 @@ async def test_installation_lookup_404_names_the_repo() -> None:
     class _UninstalledClient(GitHubClient):
         def __init__(self) -> None:  # skip real auth
             self._installation_cache = {}
+            self._slug = "example-app"
             self._app = type("_App", (), {"rest": type("_Rest", (), {"apps": _Apps()})()})()
 
     client = _UninstalledClient()
     try:
         await client._installation_id("ClawHaven/acme-app")
     except GitHubAppNotInstalledError as error:
-        assert "ClawHaven/acme-app" in str(error)
+        assert "The GitHub App example-app has no access to ClawHaven/acme-app" in str(error)
         assert "install the app" in str(error)
     else:
         raise AssertionError("expected GitHubAppNotInstalledError")
@@ -558,43 +560,54 @@ async def test_get_file_content_returns_none_when_app_not_installed() -> None:
             pass
 
         async def _for_repo(self, repo: str) -> Any:
-            raise GitHubAppNotInstalledError(repo)
+            raise GitHubAppNotInstalledError(repo, app="example-app")
 
     client = _UninstalledClient()
     assert await client.get_file_content("clawhaven/.druks", "prompts/x.md") is None
 
 
-async def test_get_bot_git_author_composes_the_public_bot_identity(
+async def test_get_bot_git_author_looks_up_the_bot_with_a_live_installation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The author is the App's bot user with GitHub's <id>+<login> noreply
-    # address; the id comes from one unauthenticated lookup, cached for the
-    # life of the process.
-    requested: list[str] = []
+    # address; the id comes from one lookup with a live installation's token,
+    # cached for the life of the process.
+    requested: list[tuple[str, int]] = []
 
     class _Users:
+        def __init__(self, installation_id: int) -> None:
+            self.installation_id = installation_id
+
         async def async_get_by_username(self, username: str) -> SimpleNamespace:
-            requested.append(username)
+            requested.append((username, self.installation_id))
             return SimpleNamespace(parsed_data=SimpleNamespace(id=123456789))
 
-    class _PublicGitHub:
-        def __init__(self, *, base_url: str) -> None:
-            assert base_url == github_api.GITHUB_API_URL
-            self.rest = SimpleNamespace(users=_Users())
+    class _InstallationGitHub:
+        def __init__(self, installation_id: int) -> None:
+            self.rest = SimpleNamespace(users=_Users(installation_id))
 
-        async def __aenter__(self) -> "_PublicGitHub":
+        async def __aenter__(self) -> "_InstallationGitHub":
             return self
 
         async def __aexit__(self, *_args: Any) -> None:
             pass
 
-    monkeypatch.setattr(github_api, "GitHub", _PublicGitHub)
+    class _Apps:
+        async def async_list_installations(self, per_page: int) -> SimpleNamespace:
+            suspended = SimpleNamespace(id=11, suspended_at=datetime(2026, 10, 1, tzinfo=UTC))
+            live = SimpleNamespace(id=22, suspended_at=None)
+            return SimpleNamespace(parsed_data=[suspended, live])
+
     monkeypatch.setattr(github_api, "_BOT_USER_ID_CACHE", {})
 
     class _SluggedClient(GitHubClient):
         def __init__(self) -> None:  # skip real auth
             self._app_id = "12345"
             self._slug = "example-app"
+            self._app = SimpleNamespace(rest=SimpleNamespace(apps=_Apps()))
+
+        async def _get_for_installation(self, installation_id: int) -> _InstallationGitHub:
+            return _InstallationGitHub(installation_id)
 
     client = _SluggedClient()
     author = await client.get_bot_git_author()
@@ -604,7 +617,7 @@ async def test_get_bot_git_author_composes_the_public_bot_identity(
         "123456789+example-app[bot]@users.noreply.github.com",
     )
     assert await client.get_bot_git_author() == author
-    assert requested == ["example-app[bot]"]
+    assert requested == [("example-app[bot]", 22)]
 
 
 def _template_generating_client(

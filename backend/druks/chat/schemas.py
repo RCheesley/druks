@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 from druks.schemas import Schema
 from druks.ui.blocks import FileSummary
@@ -17,6 +17,8 @@ class ConversationResponse(Schema):
     source: ConversationSource
     user_id: str | None
     user_name: str
+    # The group or room of the conversation. Empty for a direct chat.
+    thread_id: str
     created_at: datetime
     last_message_at: datetime
     message_count: int
@@ -41,3 +43,13 @@ class MessageResponse(Schema):
 
 class ConversationDetailResponse(ConversationResponse):
     messages: list[MessageResponse]
+
+
+class ReminderResponse(Schema):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    conversation_id: str
+    body: str
+    cron: str
+    next_send_at: datetime = Field(validation_alias="local_next_send_at")

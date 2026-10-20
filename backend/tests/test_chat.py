@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call
 from uuid import uuid4
@@ -11,9 +11,16 @@ import asyncssh
 import pytest
 from druks.accounts.enums import AccountKind
 from druks.accounts.models import Account, PersonalAccessToken
+from druks.apps.registry import channels, services
 from druks.chat import service, sockets
 from druks.chat.bridge import Bridge
-from druks.chat.constants import CHAT_KEY_NAME, CONVERSATION_HEADER, DELIVERY_FAILED_MESSAGE
+from druks.chat.constants import (
+    BRIDGE_VERSION,
+    CHAT_KEY_NAME,
+    CONVERSATION_HEADER,
+    DELIVERY_FAILED_MESSAGE,
+    NO_ANSWER_MESSAGE,
+)
 from druks.chat.enums import ConversationSource, MessageRole, MessageState
 from druks.chat.exceptions import (
     ChatBridgeError,
@@ -110,8 +117,8 @@ async def test_new_conversation_is_unnamed_private_and_answers_in_order(druks_db
     assert not conversation.title
     assert conversation.source == ConversationSource.WEB
     assert not conversation.session_file
-    assert not await Conversation.get_for_account(druks_db, conversation.id, other.id)
-    assert not await Conversation.list_for_account(druks_db, other.id)
+    assert not await Conversation.get_for_account(druks_db, conversation.id, other)
+    assert not await Conversation.list_for_account(druks_db, other)
     first = await conversation.get_unanswered_message(druks_db)
     await conversation.create_message(druks_db, "second")
     assert first.state == MessageState.PENDING
@@ -403,9 +410,7 @@ async def test_recovery_reads_live_events_then_saves_reply_and_replaces_archive(
     assert host.upload_file.await_count == 0
 
 
-@pytest.mark.parametrize(
-    ("offsets", "answer"), [([14, 28], "Done."), ([14, 28, 33], DELIVERY_FAILED_MESSAGE)]
-)
+@pytest.mark.parametrize(("offsets", "answer"), [([14, 28], "Done."), ([14, 28, 33], "")])
 def test_a_reply_answers_with_the_text_after_its_last_tool_call(offsets, answer):
     reply = Message(
         body="Still running.Still running.Done.",
@@ -413,6 +418,39 @@ def test_a_reply_answers_with_the_text_after_its_last_tool_call(offsets, answer)
     )
 
     assert reply.answer == answer
+
+
+async def test_a_channel_turn_with_no_answer_is_asked_once(druks_db, conversation, monkeypatch):
+    conversation.source = "slack"
+    conversation.connection = await VaultSecret.store(
+        druks_db,
+        services.get("slack").secret_kind,
+        Audience.service("slack"),
+        identity={},
+        secrets={},
+    )
+    await druks_db.commit()
+    send_reply = AsyncMock()
+    monkeypatch.setattr(channels.get("slack"), "send_reply", send_reply)
+    monkeypatch.setattr(Conversation, "is_held", AsyncMock(return_value=False))
+    tool_calls = [{"toolCallId": "tool-1", "textOffset": 14}]
+    monkeypatch.setattr(Bridge, "reply", AsyncMock(return_value=("Still running.", tool_calls)))
+    status = {"status": "replied", "archivePath": "", "harness": "claude"}
+    message = await conversation.get_unanswered_message(druks_db)
+    message.state = MessageState.DELIVERED
+
+    await service.finish_turn(druks_db, conversation, message, Bridge(None), status)
+
+    send_reply.assert_not_awaited()
+    asked = await conversation.get_unanswered_message(druks_db)
+    assert (asked.is_internal, asked.state, asked.body) == (True, "pending", NO_ANSWER_MESSAGE)
+
+    asked.state = MessageState.DELIVERED
+    await service.finish_turn(druks_db, conversation, asked, Bridge(None), status)
+
+    failure = send_reply.await_args.args[2]
+    assert (failure.body, failure.reply_to) == (DELIVERY_FAILED_MESSAGE, asked.id)
+    assert not await conversation.get_unanswered_message(druks_db)
 
 
 def channel(answer: bytes) -> tuple[asyncio.StreamReader, MagicMock]:
@@ -459,6 +497,34 @@ async def test_bridge_start_uploads_the_bridge_only_when_none_answers():
     assert upload.kwargs["local"].is_file()
     assert upload.kwargs["remote"].endswith("/druks-chat-bridge.mjs")
     host.exec.assert_awaited_once()
+
+
+async def test_bridge_start_retires_the_bridge_of_an_older_druks():
+    older = b'{"ok": true, "version": "older"}\n'
+    current = f'{{"ok": true, "version": "{BRIDGE_VERSION}"}}\n'.encode()
+    channels = [
+        channel(older),
+        channel(b'{"ok": true, "busy": true}\n'),
+        channel(older),
+        channel(b'{"ok": true, "busy": false}\n'),
+        channel(current),
+    ]
+    host = SimpleNamespace(
+        ssh_username="druks",
+        open_tcp_connection=AsyncMock(side_effect=channels),
+        upload_file=AsyncMock(),
+        exec=AsyncMock(return_value=SimpleNamespace(ok=True)),
+    )
+
+    # A busy bridge serves this turn; an idle one exits, and the launch carries the version.
+    await Bridge(host).start()
+    host.upload_file.assert_not_awaited()
+    await Bridge(host).start()
+
+    methods = [json.loads(writer.write.call_args.args[0])["method"] for _, writer in channels]
+    assert methods == ["ping", "retire", "ping", "retire", "ping"]
+    host.upload_file.assert_awaited_once()
+    assert BRIDGE_VERSION in host.exec.await_args.args[0][2]
 
 
 async def test_new_sandbox_restores_archive_and_drains_pending_messages(
@@ -608,6 +674,7 @@ async def test_only_the_operator_reaches_the_connected_mcp_servers_and_holds_the
                         "options": {
                             "disallowedTools": ["AskUserQuestion"],
                             "model": "claude-opus-4-7",
+                            "extraArgs": {"system-prompt-snapshot": "off"},
                             "systemPrompt": {
                                 "type": "preset",
                                 "preset": "claude_code",
@@ -636,6 +703,7 @@ async def test_only_the_operator_reaches_the_connected_mcp_servers_and_holds_the
                         "options": {
                             "disallowedTools": ["AskUserQuestion"],
                             "model": "claude-opus-4-7",
+                            "extraArgs": {"system-prompt-snapshot": "off"},
                             "systemPrompt": "Be kind.",
                             "tools": [],
                             "settingSources": [],
@@ -660,12 +728,13 @@ async def test_only_the_operator_reaches_the_connected_mcp_servers_and_holds_the
             {
                 "meta": {},
                 "env": {
-                    "CODEX_CONFIG": json.dumps(
-                        {"model": "gpt-5.5", "developer_instructions": "Be kind."}
-                    ),
+                    "CODEX_CONFIG": json.dumps({"model": "gpt-5.5"}),
                     "INITIAL_AGENT_MODE": "agent-full-access",
                 },
-                "files": {"/home/druks/.codex/auth.json": CODEX_KEY_LOGIN},
+                "files": {
+                    "/home/druks/.codex/auth.json": CODEX_KEY_LOGIN,
+                    "/home/druks/work/chat/one/AGENTS.md": "Be kind.",
+                },
                 "mode": "agent-full-access",
                 "model": "gpt-5.5",
                 "options": {"model": "model", "effort": "reasoning_effort", "fast": "fast-mode"},
@@ -797,7 +866,7 @@ async def test_each_open_page_receives_the_same_live_event(druks_db, conversatio
         socket = SimpleNamespace(app=api, send_json=send_json)
         tasks.append(
             asyncio.create_task(
-                sockets.stream_conversation(socket, conversation.id, conversation.account_id)
+                sockets.stream_conversation(socket, conversation.id, conversation.account)
             )
         )
         await asyncio.wait_for(ready.wait(), 2)
@@ -822,7 +891,7 @@ async def test_conversation_recency_comes_from_messages_not_pins(druks_db):
     for conversation in (earlier, later, empty):
         await druks_db.refresh(conversation)
 
-    conversations = await Conversation.list_for_account(druks_db, owner.id)
+    conversations = await Conversation.list_for_account(druks_db, owner)
 
     assert [conversation.id for conversation in conversations] == [earlier.id, later.id, empty.id]
     assert earlier.last_message_at == reply.created_at
@@ -831,7 +900,7 @@ async def test_conversation_recency_comes_from_messages_not_pins(druks_db):
 
     reply.created_at = later.last_message_at
     await druks_db.flush()
-    conversations = await Conversation.list_for_account(druks_db, owner.id)
+    conversations = await Conversation.list_for_account(druks_db, owner)
     assert [conversation.id for conversation in conversations] == [later.id, earlier.id, empty.id]
 
 
@@ -1163,3 +1232,20 @@ async def test_a_failed_run_reports_to_its_conversation_whether_or_not_it_parked
         True,
         True,
     )
+
+
+async def test_each_turn_opens_with_the_local_time(monkeypatch):
+    settings = SimpleNamespace(timezone="Europe/Madrid")
+    monkeypatch.setattr(service, "load_settings", lambda: settings)
+    monkeypatch.setattr(Base, "utc_now", lambda: datetime(2026, 10, 17, 21, 14, 57, tzinfo=UTC))
+    message = Message(body="Remind me in 5 minutes", transcript="", file=None)
+
+    content = await service.get_turn_content(SimpleNamespace(), "/chat", [message])
+
+    assert content == [
+        {
+            "type": "text",
+            "text": "[Internal: The time is 2026-10-17T23:14:57+02:00 (Europe/Madrid).]",
+        },
+        {"type": "text", "text": "Remind me in 5 minutes"},
+    ]

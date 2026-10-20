@@ -1,3 +1,4 @@
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,6 +26,9 @@ from .exceptions import (
     ServiceNotConnectedError,
 )
 from .oauth import OauthClient, fetch_identity, is_grant_revoked
+from .resources import Resource
+
+logger = logging.getLogger(__name__)
 
 # GoogleCalendar -> google_calendar, HTTPServer -> http_server.
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
@@ -155,6 +159,7 @@ class Service:
     settings_model: ClassVar[type[BaseModel]]
     # The ``Settings`` fields by name, each a ``ServiceField``.
     fields: ClassVar[SimpleNamespace]
+    resources: ClassVar[dict[str, type[Resource]]]
     # The one host a sandbox may send this service's secrets to. The secrets
     # proxy swaps a placeholder for the secret on requests to it only.
     host: ClassVar[str] = ""
@@ -232,6 +237,11 @@ class Service:
         cls.fields = SimpleNamespace(
             **{name: ServiceField(cls, name) for name in declared.model_fields}
         )
+        cls.resources = {}
+        for value in vars(cls).values():
+            if isinstance(value, type) and issubclass(value, Resource):
+                value.service = cls
+                cls.resources[value.slug] = value
         services.register(cls)
 
     @classmethod
@@ -287,13 +297,12 @@ class Service:
         """Store each service that druks.toml configures as its card. An entry replaces
         the credentials of a card that exists; the facts the card learned since stay."""
         configuration = load_settings()
-        for slug in configuration.manager.services:
-            if not services.get(slug):
-                raise ServiceConnectError(
-                    f"[manager] manages the service {slug!r}, and no installed app declares "
-                    "it. Remove it from manager.services."
-                )
+        undeclared = [slug for slug in configuration.manager.services if not services.get(slug)]
+        for slug in undeclared:
+            logger.info("No installed app declares the managed service %r. Druks ignores it.", slug)
         for slug, entry in configuration.services.items():
+            if slug in undeclared:
+                continue
             service = services.get(slug)
             if not service:
                 raise ServiceConnectError(
@@ -471,10 +480,10 @@ class Service:
         """Record the app's installations on the card. Runs after an install exchange."""
 
     @classmethod
-    async def issue_token(cls, resource: str) -> tuple[str, datetime]:
-        """The token a sandbox fetches for this identity, and its expiry. A
-        service without one raises."""
-        raise NotImplementedError(f"{cls.slug} issues no sandbox token")
+    async def issue_token(cls, resource: str) -> tuple[str, datetime | None]:
+        """The token a sandbox fetches for ``resource``, and its expiry."""
+        slug, _, key = resource.partition("/")
+        return await cls.resources[slug](key).get_token()
 
     @classmethod
     def get_authorization(cls, login: VaultSecret) -> str:

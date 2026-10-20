@@ -82,10 +82,12 @@ class Waha(Service):
                         "hmac": {"key": webhook_secret},
                     }
                 ],
-                "ignore": {"status": True, "groups": True, "channels": True, "broadcast": True},
+                "ignore": {"status": True, "channels": True, "broadcast": True},
                 # WhatsApp does not ring the phone while a linked client is online, and
                 # a NOWEB session marks itself online unless its config says otherwise.
-                "noweb": {"markOnline": False},
+                # The store keeps the group history that the agent reads, and it must be
+                # on before the scan.
+                "noweb": {"markOnline": False, "store": {"enabled": True, "fullSync": False}},
                 # WhatsApp names the linked device "<browserName> (<deviceName>)", and it
                 # drops a device name that comes with a browser name it does not know.
                 "client": {"deviceName": "Druks", "browserName": "Chrome"},
@@ -120,7 +122,7 @@ class Waha(Service):
     @classmethod
     async def relink(cls, session: AsyncSession, connection: VaultSecret) -> None:
         """Take a new scan on the same connection, which keeps its chats, its admin, and
-        its connected phones. The session teaches Druks the number again when it works."""
+        its paired phones. The session teaches Druks the number again when it works."""
         client = await cls.get_client(session, connection)
         await client.logout()
         await client.start()

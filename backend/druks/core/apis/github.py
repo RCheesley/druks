@@ -99,7 +99,7 @@ class GitHubClient:
                 response = await self._app.rest.apps.async_get_user_installation(owner)
             except RequestFailed as error:
                 if error.response.status_code == 404:
-                    raise GitHubAppNotInstalledError(owner) from error
+                    raise GitHubAppNotInstalledError(owner, app=self._slug) from error
                 raise
         return response.parsed_data.id
 
@@ -220,12 +220,20 @@ class GitHubClient:
     async def get_bot_git_author(self) -> tuple[str, str]:
         """Name and email for commits made as the App's bot user — the
         ``<id>+<slug>[bot]@users.noreply.github.com`` convention, the same
-        identity a squash-merge advertises. The id comes from the public users
-        endpoint, no auth needed."""
+        identity a squash-merge advertises. The id comes from the users endpoint
+        with an installation token: GitHub limits anonymous requests to 60 an hour per IP."""
         bot_name = f"{await self.get_mention_handle()}[bot]"
         user_id = _BOT_USER_ID_CACHE.get(self._app_id)
         if not user_id:
-            async with GitHub(base_url=GITHUB_API_URL) as github:
+            response = await self._app.rest.apps.async_list_installations(per_page=100)
+            installations = []
+            for installation in response.parsed_data:
+                if not installation.suspended_at:
+                    installations.append(installation)
+            if not installations:
+                raise GitHubAppNotInstalledError(bot_name, app=self._slug)
+            github = await self._get_for_installation(installations[0].id)
+            async with github:
                 response = await github.rest.users.async_get_by_username(bot_name)
             user_id = response.parsed_data.id
             _BOT_USER_ID_CACHE[self._app_id] = user_id
@@ -246,7 +254,7 @@ class GitHubClient:
             response = await self._app.rest.apps.async_get_repo_installation(owner, name)
         except RequestFailed as error:
             if error.response.status_code == 404:
-                raise GitHubAppNotInstalledError(repo) from error
+                raise GitHubAppNotInstalledError(repo, app=self._slug) from error
             raise
         installation_id: int = response.parsed_data.id
         self._installation_cache[repo] = installation_id

@@ -15,9 +15,16 @@ NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 # sets it verbatim at egress, so a stray space or colon would fail every run.
 HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
+# An OAuth scope token (RFC 6749 section 3.3): printable ASCII without a space,
+# a quote, or a backslash.
+SCOPE_PATTERN = re.compile(r"^[\x21\x23-\x5b\x5d-\x7e]+$")
+
 # Druks' own MCP server, as a box names it. Reserved: a registry row may not
 # claim it, or the emitted config would carry two servers under one key.
 DRUKS_SERVER_NAME = "druks"
+# The same server, as an agent call with a browser names it: reached with a key
+# that allows the browser tools only. Reserved for the same reason.
+BROWSER_SERVER_NAME = "browser"
 
 # The header a server's bearer fills, and its prefix. A secret header keeps
 # its own name and no prefix.

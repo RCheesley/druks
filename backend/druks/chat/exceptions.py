@@ -32,5 +32,13 @@ class ChannelHasNoThreadsError(ChatError):
     """The conversation's channel has no thread to read."""
 
 
+class ChannelStartsNoConversationsError(ChatError):
+    """The conversation's channel cannot start a chat with a person."""
+
+
 class TranscriptionError(ChatError):
     """Druks got no transcript for a voice note."""
+
+
+class ReminderError(ChatError):
+    """A reminder cannot be made as asked. The message says what to change."""

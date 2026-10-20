@@ -34,6 +34,7 @@ import type {
   McpServer,
   McpServerConnection,
   McpServerDirectoryEntry,
+  McpServerScopes,
   Service,
   Provider,
   ProviderCatalog,
@@ -349,9 +350,9 @@ export const api = {
     postJSON<WahaSession>(`/api/chat/services/waha/sessions/${encodeURIComponent(id)}/relink`, {}),
   removeWahaSession: (id: string) =>
     deleteRequest(`/api/chat/services/waha/sessions/${encodeURIComponent(id)}`),
-  openBotAdminCode: (connectionId: string) =>
+  openOneTimeCode: (connectionId: string) =>
     postJSON<{ code: string; expiresIn: number }>(
-      `/api/chat/connections/${encodeURIComponent(connectionId)}/admin-code`,
+      `/api/chat/connections/${encodeURIComponent(connectionId)}/one-time-code`,
       {},
     ),
   unpair: (connectionId: string) =>
@@ -455,4 +456,10 @@ export const api = {
     ),
   removeMcpServerHeaders: (name: string) =>
     deleteRequest(`/api/mcp-servers/${encodeURIComponent(name)}/headers`),
+  mcpServerScopes: (name: string) =>
+    getJSON<McpServerScopes>(`/api/mcp-servers/${encodeURIComponent(name)}/scopes`),
+  setMcpServerScopes: (name: string, scopes: string[]) =>
+    postJSON<McpServer>(`/api/mcp-servers/${encodeURIComponent(name)}/scopes`, { scopes }, 'PUT'),
+  removeMcpServerScopes: (name: string) =>
+    deleteRequest(`/api/mcp-servers/${encodeURIComponent(name)}/scopes`),
 }

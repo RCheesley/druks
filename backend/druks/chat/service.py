@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 from collections.abc import Sequence
@@ -7,6 +8,7 @@ from contextlib import suppress
 from datetime import timedelta
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import asyncssh
 from dbos import DBOS, StepOptions
@@ -45,9 +47,10 @@ from druks.sandbox.templates import get_template_id
 from druks.secrets.datastructures import Audience
 from druks.secrets.models import VaultSecret
 from druks.services.exceptions import ServiceNotConnectedError
+from druks.settings import load_settings
 from druks.workspaces import Workspace
 
-from .bots.constants import ADMIN_PROMPT, ADMIN_TOOLS
+from .bots.constants import ADMIN_PROMPT, ADMIN_TOOLS, THREAD_PROMPT, THREAD_TOOLS
 from .bridge import Bridge
 from .constants import (
     BRIDGE_SETTLED_STATUSES,
@@ -56,9 +59,11 @@ from .constants import (
     DELIVERY_FAILED_MESSAGE,
     FAILURE_MESSAGE,
     INTERNAL_MESSAGES_PROMPT,
+    NO_ANSWER_MESSAGE,
     NO_RESULT_MESSAGE,
     NO_RESULT_ON_SUBJECT_MESSAGE,
     RESULT_MESSAGE,
+    TIME_MESSAGE,
     TRANSCRIPTION_FAILED_MESSAGE,
     VOICE_NOTE_MARKER,
 )
@@ -100,15 +105,20 @@ async def get_agent(
         template = ADMIN_PROMPT
         admin_tools = (get_tool_name(name, [bot.app], {bot.app}) for name in bot.admin_tools)
         tools = (*admin_tools, *ADMIN_TOOLS)
+    is_shared_thread = bool(conversation.thread_id) and conversation.channel.has_readable_threads
     context = {
         "source": conversation.source,
         "thread_id": conversation.thread_id,
+        "is_shared_thread": is_shared_thread,
         "sign_ins": sign_ins,
         "apps": [app for app in iter_apps() if app.description and not app.builtin],
     }
     if conversation.connection:
         context.update(await conversation.channel.get_prompt_context(session, conversation))
     prompt = await render_prompt(template, **context)
+    if is_shared_thread and account_type in (AccountKind.BOT, AccountKind.BOT_ADMIN):
+        tools = (*tools, *THREAD_TOOLS)
+        prompt = f"{prompt}\n\n{THREAD_PROMPT}"
     return bot.id, f"{prompt}\n\n{INTERNAL_MESSAGES_PROMPT}", tools
 
 
@@ -404,10 +414,21 @@ async def send_turn(
     server = get_druks_mcp_server(allowed_tools=())
     account_type = conversation.account.kind
     timeout = 0 if account_type == AccountKind.OPERATOR else config.timeout
+    session_servers = [
+        {
+            "name": mcp_server.name,
+            "url": mcp_server.url,
+            "headers": mcp_server.get_request_headers(),
+        }
+        for mcp_server in mcp_servers
+    ]
+    # The bridge reopens a live session when its instructions or MCP servers change.
+    setup = hashlib.sha256(to_json([prompt, server.url, session_servers])).hexdigest()
     await bridge.request(
         "start",
         conversationId=conversation.id,
         archivePath=archive_path,
+        setup=setup,
         harness=config.harness_class.name,
         command=config.harness_class.adapter_command,
         effort=config.effort,
@@ -416,14 +437,7 @@ async def send_turn(
         bearerVariable=get_bearer_token_env_var(server.name),
         # Each tool call names its conversation, so a run that it starts reports back here.
         headers=[{"name": CONVERSATION_HEADER, "value": conversation.id}],
-        mcpServers=[
-            {
-                "name": mcp_server.name,
-                "url": mcp_server.url,
-                "headers": mcp_server.get_request_headers(),
-            }
-            for mcp_server in mcp_servers
-        ],
+        mcpServers=session_servers,
         **config.harness_class.get_acp_session(
             account_type, config.model, prompt, config.identity, sandbox_home, conversation_root
         ),
@@ -487,11 +501,14 @@ async def get_transcript(session: AsyncSession, file: File) -> str:
 async def get_turn_content(
     host: Host, conversation_root: str, messages: list[Message]
 ) -> list[dict]:
-    """The ACP content blocks the agent reads: each message's text, with the words of
-    its voice note under a marker, then its file. An image travels in the prompt. Audio
-    adds nothing more. Any other file goes to the conversation's folder in the sandbox,
-    and the agent gets a link to it."""
-    content = []
+    """The ACP content blocks the agent reads: the time, then each message's text, with
+    the words of its voice note under a marker, then its file. An image travels in the
+    prompt. Audio adds nothing more. Any other file goes to the conversation's folder in
+    the sandbox, and the agent gets a link to it."""
+    now = Base.utc_now().astimezone(ZoneInfo(load_settings().timezone))
+    content = [
+        {"type": "text", "text": TIME_MESSAGE.format(now=now.isoformat(), timezone=now.tzinfo)}
+    ]
     for message in messages:
         parts = [message.body]
         if message.transcript:
@@ -589,7 +606,17 @@ async def finish_turn(
     if conversation.connection:
         # A person who took the chat over during the turn answers it instead.
         if state == MessageState.REPLIED and not await conversation.is_held(session):
-            await conversation.channel.send_reply(session, conversation, reply)
+            if reply.answer:
+                await conversation.channel.send_reply(session, conversation, reply)
+            elif message.body == NO_ANSWER_MESSAGE:
+                failure = await conversation.create_message(
+                    session, DELIVERY_FAILED_MESSAGE, role=MessageRole.ASSISTANT, reply_to=message
+                )
+                await session.commit()
+                await conversation.channel.send_reply(session, conversation, failure)
+            else:
+                await conversation.create_message(session, NO_ANSWER_MESSAGE, is_internal=True)
+                await session.commit()
     elif not conversation.title:
         harness = get_harness(status["harness"])
         await name_conversation(session, conversation, bridge.host, message, body, harness)

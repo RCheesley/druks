@@ -194,7 +194,7 @@ image = "druks-sandbox"
 
 A local build needs no registry. After the installer, run
 `docker compose exec web druks sandboxes build` to refresh the image and its
-templates. See [Update / redeploy](deployment.md#update--redeploy) for template
+templates. See [Update and redeploy](deployment.md#update-and-redeploy) for template
 reuse and cleanup. Existing hosts keep their original image.
 
 ## Webhook caveat

@@ -530,7 +530,7 @@ Codex. A nested CLI reads it from the environment. The
 [configuration guide](configuration.md#harnesses) lists the variable, host, and
 header per harness.
 
-### Give an agent a service's secret
+### Give an agent a service secret
 
 An agent that calls a provider from its sandbox lists the secret it needs. The
 [service](#declare-a-service) declares the one host that its secrets can go to:
@@ -583,7 +583,9 @@ The prompt or a subsequent explicit step owns those actions.
 A Bot answers the connections that an operator links to your app, such as a
 WhatsApp number. It is not an agent: it has no contract, and no workflow awaits
 it. Each person who writes gets their own [chat conversation](chat.md#whatsapp).
-The Bot acts only through the app routes that you tag `bot`.
+The Bot acts only through the app routes that you tag `bot`. An app's number is
+public: it answers anyone who writes, and one person is the number's admin. Only
+Chat's number is private: see [WhatsApp](chat.md#whatsapp).
 
 Declare the Bot as the `bot` attribute of the app class. An app has one Bot:
 
@@ -603,12 +605,16 @@ class Helpdesk(App):
 ```
 
 - `prompt` names a template, like an agent's prompt. Druks renders it with
-  `source`, the conversation's source (`web` or `whatsapp`), and gives it to the
-  agent as its system prompt. Druks adds one paragraph at the end. It explains
-  the `[Internal: …]` messages that Druks writes to the agent.
+  `source`, the conversation's source (`web` or `whatsapp`), and `thread_id`,
+  which names the WhatsApp group of a group conversation and is empty in a
+  direct chat. Druks gives the result to the agent as its system prompt, and
+  adds one paragraph at the end. It explains the `[Internal: …]` messages that
+  Druks writes to the agent. In a group, Druks first adds a paragraph that tells
+  the agent to read the group with `chat_read_thread`, and gives it that tool.
 - `user_tools` are the tools of each person who writes to the connection.
-- `admin_tools` are the tools of the connection's admin. The admin also gets
-  Druks's admin prompt, `answer_gate`, and `chat_resume_conversation`.
+- `admin_tools` are the tools of the number's admin. The admin also gets
+  Druks's admin prompt, `answer_gate`, `chat_resume_conversation`, and the
+  [reminder](chat.md#reminders) tools.
 
 Each name is the `operation_id` of one of the app's routes tagged `bot`. Druks
 refuses to start when an app declares a Bot under another attribute name, or
@@ -652,7 +658,7 @@ never appears in the tool's input schema. A route that takes `BotUser` refuses a
 call from outside a conversation.
 
 A run that a bot tool starts remembers its conversation. Ask for approval with
-an in-app question, `self.review()`. Druks then asks the connection's admin in the
+an in-app question, `self.review()`. Druks then asks the number's admin in the
 admin's own chat, and only that admin can answer. When the run ends, Druks tells
 the conversation its result or its failure, whether or not the run waited, and the
 Bot tells the person. A run that returns nothing, such as a review that posts
@@ -777,7 +783,7 @@ the secrets before the sandbox exists, so read them from the subject alone.
 
 A vault row with one secret issues it under any name. For the secret of a
 service that does not depend on the subject,
-[list it on the agent](#give-an-agent-a-services-secret) instead.
+[list it on the agent](#give-an-agent-a-service-secret) instead.
 
 Override `get_mcp_servers(subject)` to give the sandbox an MCP server with its
 own vault row:
@@ -887,6 +893,65 @@ scheduled run can proceed.
 
 Provider selection is an operator concern. App workspace code targets the
 Druks sandbox contract, not `exe`, AWS, or Docker directly.
+
+### Give an agent a browser session
+
+An agent can drive a browser session. Name the session and the client:
+
+```python
+from druks.agents import Agent, AgentOutput
+from druks.apps import App
+from druks.browser import BrowserClient, BrowserSession
+
+
+class Balance(AgentOutput):
+    amount_due: str
+    due_date: str
+
+
+class Payables(App):
+    name = "payables"
+    supplier = BrowserSession(site="supplier.example", read_only=True)
+
+    read_balance = Agent(
+        prompt="payables/read_balance.md",
+        contract=Balance,
+        browser=supplier,
+        browser_client=BrowserClient.PINCHTAB,
+        include_plugins=False,
+        include_mcp=False,
+    )
+```
+
+The prompt names the page and the tools:
+
+```markdown
+Open https://supplier.example/account with browser_navigate and read what the
+account owes and when it is due. browser_snapshot reads the page and
+browser_evaluate runs JavaScript in it. Only read; never submit a form.
+```
+
+A workflow calls it like any other agent: `await Payables.read_balance()`.
+
+Druks borrows the session inside each call and starts PinchTab beside Chrome.
+The call's sandbox gets one MCP server, `browser`, with five tools:
+`browser_navigate`, `browser_evaluate`, `browser_snapshot`, `browser_text`, and
+`browser_action`. They work in one tab, which the first `browser_navigate`
+opens. `browser_action` takes a PinchTab action, for example `click` with a
+`ref` from `browser_snapshot`. Each tool runs in Druks against the call's
+browser. The sandbox never reaches the browser, its debugger port, its profile,
+or the bridge's network log.
+
+The key behind the server allows the five tools and nothing else. Druks mints
+it for the call and revokes it when the call ends, fails, times out, or is
+cancelled. It then releases the browser. The `browser` server comes beside the
+plugins and MCP servers the agent declares. A site the operator does not run
+can try to steer the agent through its pages, so declare `include_plugins=False`
+and `include_mcp=False` for such a site. Each of its calls gets its own sandbox,
+also in a workflow that sets `steps_reuse_sandbox = True`. A replay of a completed call
+starts no browser. An interrupted call borrows the browser again. The call gets
+prompt context only, and Druks opens no page for it. `BrowserClient.PINCHTAB`
+is the only client that an agent can use.
 
 ## Wait for input
 
@@ -1437,6 +1502,84 @@ class Acme(Service):
         return f"Bearer {login.secrets['api_key']}"
 ```
 
+### Resources at a provider
+
+A resource is an item that an app keeps at a provider, for example a Cloudflare
+Worker. Each resource has its own token.
+
+A resource class does only what the token of the resource cannot do. It has four
+steps: `create`, `update`, `delete`, and `get_token`. Druks refuses a resource
+class with other public methods. An app makes all other calls to the provider with
+`get_token()` and the SDK of the provider.
+
+Declare each resource class inside its service class, as you declare `Settings`.
+Write the steps that Druks uses with pasted credentials:
+
+```python
+from hashlib import sha256
+
+from druks.services import Resource, Service
+
+
+class Cloudflare(Service):
+    host = "api.cloudflare.com"
+
+    class Settings(BaseModel):
+        api_token: SecretStr = Field(title="API token")
+
+    class Workers(Resource):
+        def __init__(self, key: str) -> None:
+            super().__init__(sha256(key.encode()).hexdigest()[:12])
+
+        async def create(self) -> None: ...
+        async def update(self, *, domain: str | None) -> dict | None: ...
+        async def delete(self) -> None: ...
+```
+
+The app uses the resource class in the same way in each installation:
+
+```python
+worker = Cloudflare.Workers(site.id)
+await worker.create()
+state = await worker.update(domain="www.example.com")
+value, expires_at = await worker.get_token()
+```
+
+These rules apply to each resource:
+
+- A resource keeps the key that the app gives to it.
+- The `__init__` method can make the name from the key, as in the example. If
+  the class has no `__init__`, the name is the key.
+- The name starts with the `resource_prefix` of the service in druks.toml. The
+  provider must get `worker.name`, not the key.
+- The `update` method takes one attribute and returns the answer for that
+  attribute. The value `None` removes the attribute.
+- If the resource does not exist, the `delete` method must not raise an error.
+- If the class does not declare `get_token`, the token is the one secret of the
+  card. A class declares `get_token` only to give a token with fewer permissions.
+- Druks uses a token again until a short time before the token expires.
+- The slug of the class is the class name in snake case, so `Workers` gives
+  `workers`. A class can set `slug` to keep its slug after a rename.
+- A step can also raise `ResourceError`. Catch it with the errors of the SDK of
+  the provider. Its `status_code` and `reason` are the manager's answer, so the
+  app can tell its user why the manager refused a step. A step that got no
+  answer has no status code.
+
+To give the token to a sandbox, add the secrets of the resource to the secrets of
+the workspace:
+
+```python
+class SiteWorkspace(RepoWorkspace):
+    @classmethod
+    async def get_secrets(cls, site):
+        return [*await super().get_secrets(site), *await Cloudflare.Workers(site.id).get_secrets()]
+```
+
+The sandbox holds a placeholder in `CLOUDFLARE_API_TOKEN`. The name of this
+variable is the service slug and `API_TOKEN`, in upper case. On requests to
+`host`, the secrets proxy replaces the placeholder with the token. A sandbox can
+hold only one resource of each service.
+
 ## Connect provider accounts (OAuth)
 
 Declare the OAuth endpoints on the service that holds the client
@@ -1857,6 +2000,26 @@ name, a nested child, two routes a request could not tell apart, a signature
 that does not match its route, or a navigation entry that is not a static
 top-level page fails the load, with the app name and the exact cause.
 
+### What pages are for
+
+Pages show data and act on the app's own records. A page or an app setting
+does not rebuild the screens or the settings of a service that the app
+connects to. The service's own interface does this better.
+
+To change how a connected service is set up, a person asks Druks in chat. The
+app's [Bot](#answer-whatsapp-with-a-bot) makes the change through the
+service's API. Its tools are the app's routes tagged `bot`.
+
+These belong in Druks:
+
+- The service's card, with its URL and credentials.
+- An action on the app's own record, for example a retry of one delivery.
+
+This does not belong in Druks:
+
+- A page or an app setting that edits the service's configuration, for
+  example its taxes, users, or templates.
+
 ### A page function is a pure read
 
 Druks reruns a page function on initial load, on an event, on reconnect, on a
@@ -2047,7 +2210,7 @@ Import from concern namespaces, not from `druks.durable` or internal modules:
 | --- | --- |
 | `druks.accounts` | `current_account_id` |
 | `druks.apps` | `App`, `AppSettings`, `Choices`, `Secret` |
-| `druks.services` | `Service`, `Connection`, `ServiceConnectError`, `ServiceNotConnectedError`, `OauthClient`, `OauthExchangeError`, `OauthRefreshError` |
+| `druks.services` | `Service`, `Connection`, `Resource`, `ResourceError`, `ServiceConnectError`, `ServiceNotConnectedError`, `OauthClient`, `OauthExchangeError`, `OauthRefreshError` |
 | `druks.browser` | `BrowserClient`, `BrowserCommandError`, `BrowserSession`, `BrowserSessionSignedOutError`, `BrowserSessionStatus` |
 | `druks.agents` | `Agent`, `AgentOutput`, `Bot`, `BotUser` |
 | `druks.workflows` | `Workflow`, `Gate`, `GateTimeout`, `step`, run/agent response types, lifecycle enums and workflow errors |

@@ -23,7 +23,6 @@ EXEMPT_API_PATHS = {
 
 # Capability management admits the session identity only — never a PAT.
 SESSION_ONLY_API_ROUTES = {
-    ("GET", "/api/chat/conversations"),
     ("POST", "/api/chat/conversations"),
     ("GET", "/api/chat/conversations/{conversation_id}"),
     ("PATCH", "/api/chat/conversations/{conversation_id}"),
@@ -41,7 +40,7 @@ SESSION_ONLY_API_ROUTES = {
     ("GET", "/api/chat/services/twilio/numbers/{number_id}/calls"),
     ("GET", "/api/chat/services/twilio/numbers/{number_id}/calls/{call_id}"),
     ("GET", "/api/chat/services/twilio/numbers/unlinked"),
-    ("POST", "/api/chat/connections/{connection_id}/admin-code"),
+    ("POST", "/api/chat/connections/{connection_id}/one-time-code"),
     ("DELETE", "/api/chat/connections/{connection_id}/pairing"),
     ("GET", "/api/chat/services/slack/link/{token}"),
     ("PUT", "/api/browser-sessions/{name}/state"),
@@ -87,7 +86,7 @@ DUAL_GATED_API_PATHS = {
     "/api/chat/services/twilio/numbers/{number_id}/calls",
     "/api/chat/services/twilio/numbers/{number_id}/calls/{call_id}",
     "/api/chat/services/twilio/numbers/unlinked",
-    "/api/chat/connections/{connection_id}/admin-code",
+    "/api/chat/connections/{connection_id}/one-time-code",
     "/api/chat/connections/{connection_id}/pairing",
     "/api/chat/services/slack/link/{token}",
     "/api/settings/apps",

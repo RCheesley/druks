@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from druks.accounts.models import Account
 from druks.apps.registry import mcp_servers, services
 from druks.core.models import Uuid7Pk
-from druks.mcp.constants import BEARER_HEADER, DRUKS_SERVER_NAME, NAME_PATTERN
+from druks.mcp.constants import BEARER_HEADER, BROWSER_SERVER_NAME, DRUKS_SERVER_NAME, NAME_PATTERN
 from druks.mcp.datastructures import McpServerAccess
 from druks.mcp.enums import Credential, IdentityMode
 from druks.mcp.exceptions import (
@@ -46,6 +46,9 @@ class McpServer(Base, Uuid7Pk):
     # A header server takes it when added; an OAuth server's first completed
     # connect claims it. Setting the enable state carries no such decision.
     identity_mode: Mapped[str | None]
+    # The scopes a connect requests at the provider. None requests the scopes
+    # the server advertises.
+    scopes: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
     created_at: Mapped[datetime] = mapped_column(default=Base.utc_now)
 
     @classmethod
@@ -80,6 +83,7 @@ class McpServer(Base, Uuid7Pk):
                 "headers": row.headers if row else {},
                 "secret_headers": secret_headers.get(name, {}),
                 "identity_mode": row.identity_mode if row else None,
+                "scopes": row.scopes if row else None,
                 "builtin": True,
             }
         for row in rows.values():
@@ -91,6 +95,7 @@ class McpServer(Base, Uuid7Pk):
                 "headers": row.headers,
                 "secret_headers": secret_headers.get(row.name, {}),
                 "identity_mode": row.identity_mode,
+                "scopes": row.scopes,
                 "builtin": False,
             }
         return servers
@@ -207,6 +212,11 @@ class McpServer(Base, Uuid7Pk):
         server.is_enabled = is_enabled
 
     @classmethod
+    async def set_scopes(cls, session: AsyncSession, name: str, scopes: list[str] | None) -> None:
+        server = await cls.get_or_create(session, name)
+        server.scopes = scopes
+
+    @classmethod
     async def create(
         cls,
         session: AsyncSession,
@@ -221,7 +231,7 @@ class McpServer(Base, Uuid7Pk):
     ) -> "McpServer":
         """``account_id`` names the account that holds the secret headers. The server
         then holds a key per person; None keeps one set for the installation."""
-        if name == DRUKS_SERVER_NAME:
+        if name in (DRUKS_SERVER_NAME, BROWSER_SERVER_NAME):
             raise ReservedServerNameError(name)
         if not NAME_PATTERN.match(name):
             raise InvalidServerNameError(name)
